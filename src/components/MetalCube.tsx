@@ -27,7 +27,7 @@ export interface MetalCubeProps {
   highlight?: number[];
   /** clique (sem arrastar) em um adesivo */
   onStickerClick?: (index: number) => void;
-  /** arrastar sobre o cubo pede um giro de camada */
+  /** giro de camada feito arrastando no cubo (já animado e aplicado aqui dentro) */
   onTurn?: (move: Move) => void;
   /** liga o brilho ao passar o mouse sobre os adesivos */
   hoverGlow?: boolean;
@@ -113,7 +113,7 @@ const MetalCube = forwardRef<MetalCubeHandle, MetalCubeProps>(function MetalCube
   useEffect(() => {
     const mount = mountRef.current!;
     const renderer = new THREE.WebGLRenderer({ antialias: true, alpha: true });
-    renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
+    renderer.setPixelRatio(Math.min(window.devicePixelRatio, 1.75));
     renderer.toneMapping = THREE.NeutralToneMapping;
     renderer.outputColorSpace = THREE.SRGBColorSpace;
     renderer.domElement.style.touchAction = "none";
@@ -154,6 +154,7 @@ const MetalCube = forwardRef<MetalCubeHandle, MetalCubeProps>(function MetalCube
     world.current = { renderer, scene, camera, controls, stage, root, shadow, bodyMat };
 
     // ---------- interação ----------
+    const el = renderer.domElement;
     const raycaster = new THREE.Raycaster();
     const ndc = new THREE.Vector2();
     const pick = (e: PointerEvent): StickerMesh | null => {
@@ -170,65 +171,157 @@ const MetalCube = forwardRef<MetalCubeHandle, MetalCubeProps>(function MetalCube
       return new THREE.Vector2((p.x * rect.width) / 2, (-p.y * rect.height) / 2);
     };
 
-    let press: { x: number; y: number; sticker: StickerMesh | null; done: boolean } | null = null;
+    type DragTurn = {
+      axis: Axis;
+      layer: number;
+      rotSign: number;
+      screenDir: THREE.Vector2;
+      pxPer90: number;
+      pivot: THREE.Group;
+      cubies: { mesh: THREE.Group; home: Vec3 }[];
+      angle: number;
+    };
+    let press: {
+      x: number;
+      y: number;
+      sticker: StickerMesh | null;
+      turn: DragTurn | null;
+      lastX: number;
+      lastY: number;
+      lastT: number;
+      vel: number;
+    } | null = null;
+    const axisVecs = [new THREE.Vector3(1, 0, 0), new THREE.Vector3(0, 1, 0), new THREE.Vector3(0, 0, 1)];
+
     const onDown = (e: PointerEvent) => {
       const c = cube.current;
       const s = c && !c.animating ? pick(e) : null;
-      press = { x: e.clientX, y: e.clientY, sticker: s, done: false };
-      // arrastar sobre o cubo gira camada; fora dele, gira a vista
+      press = { x: e.clientX, y: e.clientY, sticker: s, turn: null, lastX: e.clientX, lastY: e.clientY, lastT: performance.now(), vel: 0 };
+      // arrastar sobre o cubo gira a camada; fora dele, gira a vista
       controls.enabled = !(s && props.current.onTurn);
+      if (s) el.setPointerCapture(e.pointerId);
     };
-    const onMove = (e: PointerEvent) => {
-      const c = cube.current;
-      if (!c) return;
-      if (!press) {
-        if (props.current.hoverGlow && e.pointerType === "mouse") {
-          const s = pick(e);
-          c.hovered = s ? (s.userData.index as number) : -1;
-          renderer.domElement.style.cursor = s ? "pointer" : "grab";
-        }
-        return;
-      }
-      if (press.done || !press.sticker || !props.current.onTurn || c.animating) return;
-      const drag = new THREE.Vector2(e.clientX - press.x, e.clientY - press.y);
-      if (drag.length() < 12) return;
-      press.done = true;
-      const f = faceletsFor(c.n)[press.sticker.userData.index as number];
+
+    const startTurn = (c: NonNullable<typeof cube.current>, sticker: StickerMesh, drag: THREE.Vector2): DragTurn | null => {
+      const f = faceletsFor(c.n)[sticker.userData.index as number];
       const normalAxis = f.normal.findIndex((v) => v !== 0);
       const center = new THREE.Vector3();
-      press.sticker.getWorldPosition(center);
+      sticker.getWorldPosition(center);
       const base = toScreen(center);
       // escolhe a direção na superfície que mais combina com o arraste
-      let best: { axis: number; sign: number; score: number } = { axis: -1, sign: 1, score: 0 };
+      let best = { axis: -1, sign: 1, score: 0, sd: new THREE.Vector2() };
       for (let a = 0; a < 3; a++) {
         if (a === normalAxis) continue;
-        const t = new THREE.Vector3().setComponent(a, 1);
-        const sd = toScreen(center.clone().add(t)).sub(base);
+        const sd = toScreen(center.clone().add(axisVecs[a])).sub(base);
         if (sd.length() < 1e-3) continue;
         const score = drag.dot(sd) / sd.length();
-        if (Math.abs(score) > Math.abs(best.score)) best = { axis: a, sign: Math.sign(score), score };
+        if (Math.abs(score) > Math.abs(best.score)) best = { axis: a, sign: Math.sign(score), score, sd };
       }
-      if (best.axis < 0) return;
+      if (best.axis < 0) return null;
       const n = new THREE.Vector3(...f.normal);
       const d = new THREE.Vector3().setComponent(best.axis, best.sign);
       const r = new THREE.Vector3().crossVectors(n, d); // girar +90° em torno de r leva n → d
       const axis = [0, 1, 2].find((k) => r.getComponent(k) !== 0)! as Axis;
-      const q = Math.sign(r.getComponent(axis)) as 1 | -1;
-      props.current.onTurn?.({ axis, layer: f.pos[axis], q });
+      const layer = f.pos[axis];
+      const pivot = new THREE.Group();
+      root.add(pivot);
+      const cubies = c.cubies.filter(({ home }) => home[axis] === layer);
+      cubies.forEach(({ mesh }) => pivot.attach(mesh));
+      c.animating = true;
+      c.hovered = -1;
+      const unitPx = best.sd.length();
+      return {
+        axis,
+        layer,
+        rotSign: Math.sign(r.getComponent(axis)),
+        screenDir: best.sd.clone().normalize().multiplyScalar(best.sign),
+        // ~ arrastar a largura de 1,6 peça = 90°
+        pxPer90: Math.max(60, unitPx * 1.6),
+        pivot,
+        cubies,
+        angle: 0,
+      };
     };
+
+    const onMove = (e: PointerEvent) => {
+      const c = cube.current;
+      if (!c) return;
+      if (!press) {
+        if (props.current.hoverGlow && e.pointerType === "mouse" && !c.animating) {
+          const s = pick(e);
+          c.hovered = s ? (s.userData.index as number) : -1;
+          el.style.cursor = s ? "pointer" : "grab";
+        }
+        return;
+      }
+      if (!press.sticker || !props.current.onTurn) return;
+      const drag = new THREE.Vector2(e.clientX - press.x, e.clientY - press.y);
+      if (!press.turn) {
+        if (drag.length() < 8 || c.animating) return;
+        press.turn = startTurn(c, press.sticker, drag);
+        if (!press.turn) return;
+      }
+      const t = press.turn;
+      const now = performance.now();
+      const proj = drag.dot(t.screenDir);
+      const prevProj = new THREE.Vector2(press.lastX - press.x, press.lastY - press.y).dot(t.screenDir);
+      const dt = Math.max(1, now - press.lastT);
+      press.vel = press.vel * 0.6 + ((proj - prevProj) / dt) * 0.4; // px/ms
+      press.lastX = e.clientX;
+      press.lastY = e.clientY;
+      press.lastT = now;
+      t.angle = t.rotSign * (proj / t.pxPer90) * (Math.PI / 2);
+      t.pivot.quaternion.setFromAxisAngle(axisVecs[t.axis], t.angle);
+    };
+
+    const finishTurn = (c: NonNullable<typeof cube.current>, t: DragTurn, vel: number) => {
+      const quarter = Math.PI / 2;
+      let k = Math.round(t.angle / quarter);
+      // um "peteleco" rápido completa o giro mesmo com pouco arraste
+      const flick = t.rotSign * vel;
+      if (k === 0 && Math.abs(flick) > 0.5) k = Math.sign(flick);
+      else if (k === 0 && Math.abs(t.angle) > quarter * 0.3) k = Math.sign(t.angle);
+      const from = t.angle;
+      const to = k * quarter;
+      const start = performance.now();
+      const dur = 120 + Math.min(140, Math.abs(to - from) * 160);
+      const step = (now: number) => {
+        const p = Math.min(1, (now - start) / dur);
+        const e = 1 - Math.pow(1 - p, 3);
+        t.pivot.quaternion.setFromAxisAngle(axisVecs[t.axis], from + (to - from) * e);
+        if (p < 1) return void requestAnimationFrame(step);
+        const sp = spacing();
+        t.cubies.forEach(({ mesh, home }) => {
+          root.attach(mesh);
+          mesh.position.set(home[0] * UNIT * sp, home[1] * UNIT * sp, home[2] * UNIT * sp);
+          mesh.quaternion.identity();
+        });
+        root.remove(t.pivot);
+        c.animating = false;
+        const kk = ((k % 4) + 4) % 4;
+        if (kk !== 0) {
+          const move: Move = { axis: t.axis, layer: t.layer, q: kk === 1 ? 1 : kk === 2 ? 2 : -1 };
+          paint(applyMove(c.n, c.current, move));
+          props.current.onTurn?.(move);
+        }
+      };
+      requestAnimationFrame(step);
+    };
+
     const onUp = (e: PointerEvent) => {
       controls.enabled = true;
       if (!press) return;
-      const moved = Math.hypot(e.clientX - press.x, e.clientY - press.y);
-      const s = press.sticker;
+      const p = press;
       press = null;
-      if (moved > 6 || !s || cube.current?.animating) return;
-      props.current.onStickerClick?.(s.userData.index as number);
+      const c = cube.current;
+      if (p.turn && c) return finishTurn(c, p.turn, p.vel);
+      const moved = Math.hypot(e.clientX - p.x, e.clientY - p.y);
+      if (moved > 6 || !p.sticker || c?.animating) return;
+      props.current.onStickerClick?.(p.sticker.userData.index as number);
     };
     const onLeave = () => {
       if (cube.current) cube.current.hovered = -1;
     };
-    const el = renderer.domElement;
     el.addEventListener("pointerdown", onDown);
     el.addEventListener("pointermove", onMove);
     window.addEventListener("pointerup", onUp);
@@ -456,6 +549,13 @@ const MetalCube = forwardRef<MetalCubeHandle, MetalCubeProps>(function MetalCube
       const w = world.current;
       const c = cube.current;
       if (!w || !c) return Promise.resolve();
+      if (c.animating) {
+        // espera um giro em andamento (ex.: arraste) terminar
+        const self = this as MetalCubeHandle;
+        return new Promise<void>((r) => requestAnimationFrame(() => r())).then(() =>
+          self.animateMove(move, durationMs),
+        );
+      }
       const axisVec = new THREE.Vector3().setComponent(move.axis, 1);
       const angle = (move.q * Math.PI) / 2;
       const layer = c.cubies.filter(({ home }) => home[move.axis] === move.layer);

@@ -2,9 +2,9 @@
 
 App web (Next.js 16 + Tailwind CSS 4 + three.js) para **sincronizar o seu cubo mágico físico** com um cubo 3D e **ver o passo a passo da solução**.
 
-- Tamanhos de 2×2 a 7×7 (solução automática no 2×2, ótima, e no 3×3, Kociemba; os maiores dá para pintar, embaralhar e girar).
+- Tamanhos 2×2 (solução ótima) e 3×3 (Kociemba).
 - Variações visuais: Clássico, Sem adesivo, Cromado, Dourado, Neon e Pastel.
-- Arraste sobre o cubo para girar qualquer camada; arraste o fundo para mudar a vista.
+- Arraste sobre o cubo para girar a camada (ela acompanha o mouse/dedo e encaixa sozinha); arraste o fundo para mudar a vista.
 
 ## Como usar
 

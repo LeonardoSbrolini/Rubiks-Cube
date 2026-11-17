@@ -28,7 +28,7 @@ import {
 } from "@/lib/cube";
 import { validate3 } from "@/lib/validate3";
 import { validate2 } from "@/lib/twoByTwo";
-import { solve, SOLVABLE_SIZES, warmUpSolver } from "@/lib/solver";
+import { solve, warmUpSolver } from "@/lib/solver";
 import { THEMES, themeHex, type Theme } from "@/lib/themes";
 
 type Tab = "paint" | "solve";
@@ -99,7 +99,7 @@ export default function CubeSolverApp() {
 
   const validation = useMemo(() => validateFor(size, cube), [size, cube]);
   const solved = useMemo(() => isSolved(size, cube), [size, cube]);
-  const canSolve = SOLVABLE_SIZES.includes(size);
+  
   const centers = useMemo(() => {
     if (size % 2 === 0) return null;
     const k = size * size;
@@ -138,34 +138,59 @@ export default function CubeSolverApp() {
   );
 
   // ---------------- movimentos ----------------
+  /** aplica um giro ao estado (a animação já aconteceu) */
+  const commitMove = useCallback(
+    (m: Move, celebrateIfSolved = true) => {
+      const before = cubeNow.current;
+      const ns = applyMove(size, before, m);
+      cubeNow.current = ns;
+      setCube(ns);
+      if (celebrateIfSolved && !isSolved(size, before) && isSolved(size, ns)) celebrate();
+    },
+    [size, celebrate],
+  );
+
   const runMove = useCallback(
     async (m: Move, celebrateIfSolved = true) => {
       if (busy.current) return false;
       busy.current = true;
-      await cubeRef.current?.animateMove(m, 300 / speed);
-      const before = cubeNow.current;
-      const ns = applyMove(size, before, m);
-      const becameSolved = !isSolved(size, before) && isSolved(size, ns);
-      cubeNow.current = ns;
-      setCube(ns);
+      await cubeRef.current?.animateMove(m, 260 / speed);
+      commitMove(m, celebrateIfSolved);
       busy.current = false;
-      if (becameSolved && celebrateIfSolved) celebrate();
       return true;
     },
-    [speed, size, celebrate],
+    [speed, commitMove],
   );
 
-  const manualMove = useCallback(
-    async (m: Move) => {
-      if (solution) {
-        setSolution(null);
-        setPlaying(false);
-        setTab("paint");
-      }
-      await runMove(m);
-    },
-    [runMove, solution],
-  );
+  const leaveSolution = useCallback(() => {
+    if (!solution) return;
+    setSolution(null);
+    setPlaying(false);
+    setTab("paint");
+  }, [solution]);
+
+  // fila de giros manuais: cliques/teclas rápidos entram na fila e animam em sequência
+  const queue = useRef<Move[]>([]);
+  const pump = async () => {
+    if (busy.current) return;
+    busy.current = true;
+    while (queue.current.length) {
+      const m = queue.current.shift()!;
+      await cubeRef.current?.animateMove(m, queue.current.length ? 110 : 220);
+      commitMove(m);
+    }
+    busy.current = false;
+  };
+  const manualMove = (m: Move) => {
+    leaveSolution();
+    queue.current.push(m);
+    pump();
+  };
+  /** giro feito arrastando no cubo 3D (já animado lá dentro) */
+  const dragTurn = (m: Move) => {
+    leaveSolution();
+    commitMove(m);
+  };
 
   const next = useCallback(async () => {
     if (!solution || step >= solution.length) return;
@@ -222,11 +247,12 @@ export default function CubeSolverApp() {
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
-  }, [manualMove, next, prev, solution, size]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [next, prev, solution, size, leaveSolution]);
 
   // ---------------- resolver ----------------
   const runSolver = async () => {
-    if (!validation.ok || !validation.solverInput || !canSolve) return;
+    if (!validation.ok || !validation.solverInput || solving) return;
     setSolverError(null);
     if (solved) {
       setSolution([]);
@@ -322,7 +348,7 @@ export default function CubeSolverApp() {
       {/* ------------------------------------------------ conteúdo */}
       <main className="relative z-10 flex min-h-0 flex-1 flex-col gap-3 px-3 pb-3 lg:grid lg:grid-cols-[minmax(0,1fr)_400px] lg:gap-4 lg:px-6 lg:pb-5">
         {/* palco 3D */}
-        <section className="glass relative h-[46dvh] shrink-0 overflow-hidden rounded-[28px] lg:h-auto">
+        <section className="stage relative h-[46dvh] shrink-0 overflow-hidden rounded-[28px] lg:h-auto">
           <MetalCube
             ref={cubeRef}
             size={size}
@@ -330,7 +356,7 @@ export default function CubeSolverApp() {
             theme={theme}
             highlight={tab === "paint" ? validation.badFacelets : undefined}
             onStickerClick={tab === "paint" ? paint : undefined}
-            onTurn={manualMove}
+            onTurn={dragTurn}
             className="absolute inset-0"
           />
           <Confetti fire={confetti} colors={COLORS.map((c) => themeHex(theme, c.id))} />
@@ -380,7 +406,7 @@ export default function CubeSolverApp() {
                   </button>
                 ))}
               </div>
-            ) : (
+            ) : solution ? (
               <div className="glass-strong flex w-full max-w-2xl items-center gap-3 rounded-3xl p-2.5 sm:gap-4 sm:p-3">
                 <div
                   key={step}
@@ -419,7 +445,7 @@ export default function CubeSolverApp() {
                   </Ctrl>
                 </div>
               </div>
-            )}
+            ) : null}
           </div>
         </section>
 
@@ -429,8 +455,12 @@ export default function CubeSolverApp() {
             {(["paint", "solve"] as const).map((t) => (
               <button
                 key={t}
-                onClick={() => (t === "solve" ? solution && setTab("solve") : setTab("paint"))}
-                disabled={t === "solve" && !solution}
+                onClick={() => {
+                  if (t === tab) return;
+                  if (t === "paint") return backToPaint();
+                  setTab("solve");
+                  if (!solution && validation.ok) runSolver();
+                }}
                 className={`flex-1 rounded-xl py-2 text-sm font-medium transition disabled:opacity-40 ${
                   tab === t ? "bg-white/10 text-white shadow-inner" : "text-zinc-400 hover:text-zinc-100"
                 }`}
@@ -474,17 +504,12 @@ export default function CubeSolverApp() {
                     ))}
                   </ul>
                 )}
-                {!canSolve && (
-                  <p className="mt-1 text-xs text-zinc-500">
-                    O passo a passo automático está disponível para 2×2 e 3×3. No {size}×{size} dá para pintar, embaralhar e girar livremente.
-                  </p>
-                )}
                 {solverError && <p className="mt-1 text-sm text-red-400">{solverError}</p>}
               </div>
 
               <button
                 onClick={runSolver}
-                disabled={!validation.ok || solving || !canSolve}
+                disabled={!validation.ok || solving}
                 className="shine relative shrink-0 overflow-hidden rounded-2xl py-3 font-semibold text-zinc-950 transition enabled:hover:brightness-110 enabled:active:scale-[.98] disabled:cursor-not-allowed disabled:opacity-35"
                 style={{ background: "linear-gradient(135deg, var(--accent), #ffffff)" }}
               >
@@ -496,6 +521,34 @@ export default function CubeSolverApp() {
                 ) : (
                   "Resolver"
                 )}
+              </button>
+            </div>
+          ) : !solution ? (
+            <div className="glass flex shrink-0 flex-col items-center justify-center gap-4 rounded-3xl p-6 text-center lg:min-h-0 lg:flex-1 lg:shrink">
+              <div className="grid h-14 w-14 place-items-center rounded-2xl bg-white/5 text-2xl">🧩</div>
+              <div>
+                <h2 className="font-semibold">Passo a passo da solução</h2>
+                <p className="mt-1 text-[13px] text-zinc-400">
+                  {validation.ok
+                    ? "Seu cubo está pronto. Calcule a solução para ver cada movimento animado no cubo."
+                    : "Primeiro pinte o cubo igual ao seu na aba Sincronizar."}
+                </p>
+              </div>
+              {!validation.ok && (
+                <ul className="space-y-0.5 text-[13px] text-amber-300">
+                  {validation.errors.map((e) => (
+                    <li key={e}>• {e}</li>
+                  ))}
+                </ul>
+              )}
+              {solverError && <p className="text-sm text-red-400">{solverError}</p>}
+              <button
+                onClick={validation.ok ? runSolver : () => setTab("paint")}
+                disabled={solving}
+                className="shine relative w-full overflow-hidden rounded-2xl py-3 font-semibold text-zinc-950 transition enabled:hover:brightness-110 disabled:opacity-50"
+                style={{ background: "linear-gradient(135deg, var(--accent), #ffffff)" }}
+              >
+                {solving ? "Calculando…" : validation.ok ? "Resolver agora" : "Ir para a pintura"}
               </button>
             </div>
           ) : (
@@ -589,15 +642,15 @@ export default function CubeSolverApp() {
 // ---------------------------------------------------------------- peças de UI
 
 function Aurora({ theme }: { theme: Theme }) {
+  // gradientes estáticos (sem filtro de desfoque animado) para não pesar na GPU
   return (
-    <div aria-hidden className="pointer-events-none absolute inset-0 overflow-hidden">
+    <div aria-hidden className="pointer-events-none absolute inset-0">
       <div
-        className="aurora absolute -top-1/3 -left-1/4 h-[70vmax] w-[70vmax] rounded-full opacity-25 blur-[120px]"
-        style={{ background: theme.accent }}
-      />
-      <div
-        className="aurora aurora-2 absolute -right-1/4 -bottom-1/3 h-[60vmax] w-[60vmax] rounded-full opacity-20 blur-[120px]"
-        style={{ background: "#6366f1" }}
+        className="absolute inset-0 transition-[background] duration-700"
+        style={{
+          background: `radial-gradient(60vmax 50vmax at 8% 0%, ${theme.accent}40, transparent 60%),
+            radial-gradient(55vmax 45vmax at 100% 100%, #6366f133, transparent 60%)`,
+        }}
       />
       <div className="grid-bg absolute inset-0 opacity-[0.07]" />
     </div>

@@ -27,11 +27,17 @@ body {
     0 20px 50px -20px rgb(0 0 0 / 0.6);
 }
 
+/* elementos sobre o canvas 3D: sem backdrop-filter (ele seria recalculado a cada quadro) */
 .glass-strong {
-  background: rgb(10 10 16 / 0.55);
+  background: rgb(14 14 22 / 0.82);
   border: 1px solid rgb(255 255 255 / 0.1);
-  backdrop-filter: blur(16px) saturate(150%);
   box-shadow: 0 10px 40px -10px rgb(0 0 0 / 0.7);
+}
+
+.stage {
+  background: radial-gradient(ellipse at 50% 35%, rgb(255 255 255 / 0.07), rgb(255 255 255 / 0.015) 70%);
+  border: 1px solid rgb(255 255 255 / 0.08);
+  box-shadow: 0 1px 0 rgb(255 255 255 / 0.06) inset;
 }
 
 .grid-bg {
@@ -40,26 +46,6 @@ body {
     linear-gradient(90deg, rgb(255 255 255 / 0.5) 1px, transparent 1px);
   background-size: 48px 48px;
   mask-image: radial-gradient(ellipse at center, black 20%, transparent 75%);
-}
-
-.aurora {
-  animation: drift 18s ease-in-out infinite alternate;
-  transition: background 0.8s ease;
-}
-.aurora-2 {
-  animation-duration: 24s;
-  animation-direction: alternate-reverse;
-}
-@keyframes drift {
-  0% {
-    transform: translate(0, 0) scale(1);
-  }
-  50% {
-    transform: translate(8vw, 6vh) scale(1.1);
-  }
-  100% {
-    transform: translate(-4vw, 10vh) scale(0.95);
-  }
 }
 
 .shine::after {
@@ -114,7 +100,6 @@ body {
 }
 
 @media (prefers-reduced-motion: reduce) {
-  .aurora,
   .shine::after,
   .logo,
   .move-pop {

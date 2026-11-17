@@ -59,7 +59,8 @@ export const FACE_NAME: Record<Face, string> = {
   B: "Trás",
 };
 
-export const SIZES = [2, 3, 4, 5, 6, 7] as const;
+/** tamanhos oferecidos na interface (os que têm solução automática) */
+export const SIZES = [2, 3] as const;
 export type Size = (typeof SIZES)[number];
 
 export type State = Sticker[]; // length 6*N*N

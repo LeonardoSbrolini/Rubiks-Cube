@@ -1,10 +1,11 @@
 /**
- * Modelo do cubo 3x3 baseado em "facelets" (54 adesivos), na mesma ordem
- * usada pelo algoritmo de Kociemba / cubejs: U(0-8) R(9-17) F(18-26) D(27-35) L(36-44) B(45-53).
+ * Modelo genérico de cubo NxN (2x2 até 7x7) baseado em adesivos ("facelets").
  *
- * Cada adesivo guarda uma cor (ColorId). As faces são identificadas pela cor do centro,
- * então o usuário pode segurar o cubo em qualquer orientação desde que pinte os centros
- * corretamente.
+ * Ordem das faces: U R F D L B, cada uma com N*N adesivos lidos linha a linha,
+ * na mesma convenção do Kociemba / cubejs (para N=3 a string é idêntica).
+ *
+ * Coordenadas inteiras: cada peça fica em {-(N-1), -(N-3), …, N-1} (passo 2) em cada eixo.
+ * x → direita, y → cima, z → frente (convenção do three.js).
  */
 
 export type Face = "U" | "R" | "F" | "D" | "L" | "B";
@@ -30,6 +31,14 @@ export const COLOR_NAME: Record<Sticker, string> = {
   ...(Object.fromEntries(COLORS.map((c) => [c.id, c.name])) as Record<ColorId, string>),
   X: "Sem cor",
 };
+export const OPPOSITE_COLOR: Record<ColorId, ColorId> = {
+  W: "Y",
+  Y: "W",
+  G: "B",
+  B: "G",
+  R: "O",
+  O: "R",
+};
 
 /** Esquema ocidental padrão: branco em cima, verde na frente. */
 export const DEFAULT_SCHEME: Record<Face, ColorId> = {
@@ -50,34 +59,38 @@ export const FACE_NAME: Record<Face, string> = {
   B: "Trás",
 };
 
-export type State = Sticker[]; // length 54
+export const SIZES = [2, 3, 4, 5, 6, 7] as const;
+export type Size = (typeof SIZES)[number];
 
-export function solvedState(scheme = DEFAULT_SCHEME): State {
-  return FACES.flatMap((f) => Array<Sticker>(9).fill(scheme[f]));
+export type State = Sticker[]; // length 6*N*N
+
+export function solvedState(n: number, scheme = DEFAULT_SCHEME): State {
+  return FACES.flatMap((f) => Array<Sticker>(n * n).fill(scheme[f]));
 }
 
-/** Tudo sem cor, exceto os centros (esquema padrão). */
-export function blankState(scheme = DEFAULT_SCHEME): State {
+/** Tudo sem cor; em cubos ímpares o centro fixo de cada face já vem pintado. */
+export function blankState(n: number, scheme = DEFAULT_SCHEME): State {
+  const mid = n % 2 === 1 ? (n * n - 1) / 2 : -1;
   return FACES.flatMap((f) =>
-    Array.from({ length: 9 }, (_, i): Sticker => (i === 4 ? scheme[f] : "X")),
+    Array.from({ length: n * n }, (_, i): Sticker => (i === mid ? scheme[f] : "X")),
   );
 }
 
 // ---------------------------------------------------------------------------
-// Geometria: posição (x,y,z ∈ {-1,0,1}) e normal de cada adesivo.
-// x → direita, y → cima, z → frente (convenção do three.js).
+// Geometria
 // ---------------------------------------------------------------------------
 
 export type Vec3 = [number, number, number];
+export type Axis = 0 | 1 | 2;
 export interface Facelet {
   index: number;
   face: Face;
+  /** posição (inteira) da peça que contém o adesivo */
   pos: Vec3;
   normal: Vec3;
 }
 
 const FACE_FRAME: Record<Face, { origin: Vec3; col: Vec3; row: Vec3; normal: Vec3 }> = {
-  // origem = posição do adesivo 1 da face; col/row = direção de avanço
   U: { origin: [-1, 1, -1], col: [1, 0, 0], row: [0, 0, 1], normal: [0, 1, 0] },
   R: { origin: [1, 1, 1], col: [0, 0, -1], row: [0, -1, 0], normal: [1, 0, 0] },
   F: { origin: [-1, 1, 1], col: [1, 0, 0], row: [0, -1, 0], normal: [0, 0, 1] },
@@ -86,342 +99,111 @@ const FACE_FRAME: Record<Face, { origin: Vec3; col: Vec3; row: Vec3; normal: Vec
   B: { origin: [1, 1, -1], col: [-1, 0, 0], row: [0, -1, 0], normal: [0, 0, -1] },
 };
 
-export const FACELETS: Facelet[] = FACES.flatMap((face, fi) => {
-  const { origin, col, row, normal } = FACE_FRAME[face];
-  return Array.from({ length: 9 }, (_, i) => {
-    const r = Math.floor(i / 3);
-    const c = i % 3;
-    const pos: Vec3 = [
-      origin[0] + col[0] * c + row[0] * r,
-      origin[1] + col[1] * c + row[1] * r,
-      origin[2] + col[2] * c + row[2] * r,
-    ];
-    return { index: fi * 9 + i, face, pos, normal };
-  });
-});
-
+const geoCache = new Map<number, { facelets: Facelet[]; byKey: Map<string, number> }>();
 const key = (p: Vec3, n: Vec3) => `${p.join(",")}|${n.join(",")}`;
-const FACELET_BY_KEY = new Map(FACELETS.map((f) => [key(f.pos, f.normal), f.index]));
+
+function geometry(n: number) {
+  let g = geoCache.get(n);
+  if (g) return g;
+  const m = n - 1;
+  const facelets = FACES.flatMap((face, fi) => {
+    const { origin, col, row, normal } = FACE_FRAME[face];
+    return Array.from({ length: n * n }, (_, i): Facelet => {
+      const r = Math.floor(i / n);
+      const c = i % n;
+      const pos = [0, 1, 2].map((k) => origin[k] * m + 2 * (col[k] * c + row[k] * r)) as Vec3;
+      return { index: fi * n * n + i, face, pos, normal };
+    });
+  });
+  g = { facelets, byKey: new Map(facelets.map((f) => [key(f.pos, f.normal), f.index])) };
+  geoCache.set(n, g);
+  return g;
+}
+
+export const faceletsFor = (n: number) => geometry(n).facelets;
+
+/** Posições de todas as peças visíveis */
+export function cubiePositions(n: number): Vec3[] {
+  const out: Vec3[] = [];
+  const m = n - 1;
+  for (let x = -m; x <= m; x += 2)
+    for (let y = -m; y <= m; y += 2)
+      for (let z = -m; z <= m; z += 2)
+        if (Math.abs(x) === m || Math.abs(y) === m || Math.abs(z) === m) out.push([x, y, z]);
+  return out;
+}
 
 // ---------------------------------------------------------------------------
 // Movimentos
 // ---------------------------------------------------------------------------
 
-export type Axis = 0 | 1 | 2; // x, y, z
-export interface MoveDef {
+/** Giro de uma camada: eixo, coordenada da camada e quartos de volta (positivo = anti-horário em torno do eixo +). */
+export interface Move {
   axis: Axis;
-  /** camada afetada: 1, -1 ou 0 (fatia do meio) */
   layer: number;
-  /** sentido em quartos de volta, positivo = anti-horário pela regra da mão direita em torno do eixo + */
-  dir: 1 | -1;
+  q: 1 | -1 | 2;
 }
 
-/** Movimento horário de cada face, visto de frente para ela. */
-export const BASE_MOVES: Record<Face, MoveDef> = {
-  U: { axis: 1, layer: 1, dir: -1 },
-  D: { axis: 1, layer: -1, dir: 1 },
-  R: { axis: 0, layer: 1, dir: -1 },
-  L: { axis: 0, layer: -1, dir: 1 },
-  F: { axis: 2, layer: 1, dir: -1 },
-  B: { axis: 2, layer: -1, dir: 1 },
+/** Eixo, lado e sentido horário (visto de frente) de cada face */
+const FACE_DEF: Record<Face, { axis: Axis; side: 1 | -1; cw: 1 | -1 }> = {
+  U: { axis: 1, side: 1, cw: -1 },
+  D: { axis: 1, side: -1, cw: 1 },
+  R: { axis: 0, side: 1, cw: -1 },
+  L: { axis: 0, side: -1, cw: 1 },
+  F: { axis: 2, side: 1, cw: -1 },
+  B: { axis: 2, side: -1, cw: 1 },
 };
 
-export interface Move {
-  face: Face;
-  /** 1 = horário, -1 = anti-horário ('), 2 = meia volta */
-  turns: 1 | -1 | 2;
+/** Giro de uma face externa: turns 1 = horário, -1 = anti-horário, 2 = meia volta */
+export function faceMove(n: number, face: Face, turns: 1 | -1 | 2): Move {
+  const d = FACE_DEF[face];
+  const q = turns === 2 ? 2 : ((d.cw * turns) as 1 | -1);
+  return { axis: d.axis, layer: d.side * (n - 1), q };
 }
 
-export function parseMove(s: string): Move {
-  const face = s[0] as Face;
-  if (!FACES.includes(face)) throw new Error(`Movimento inválido: ${s}`);
-  const suf = s.slice(1);
-  const turns = suf === "'" ? -1 : suf === "2" ? 2 : 1;
-  return { face, turns };
-}
-
-export function parseAlg(s: string): Move[] {
+export function parseAlg(n: number, s: string): Move[] {
   return s
     .trim()
     .split(/\s+/)
     .filter(Boolean)
-    .map(parseMove);
-}
-
-export function moveToString(m: Move): string {
-  return m.face + (m.turns === -1 ? "'" : m.turns === 2 ? "2" : "");
+    .map((t) => {
+      const face = t[0] as Face;
+      if (!FACES.includes(face)) throw new Error(`Movimento inválido: ${t}`);
+      const suf = t.slice(1);
+      return faceMove(n, face, suf === "'" ? -1 : suf === "2" ? 2 : 1);
+    });
 }
 
 export function invertMove(m: Move): Move {
-  return { face: m.face, turns: m.turns === 2 ? 2 : (-m.turns as 1 | -1) };
+  return { ...m, q: m.q === 2 ? 2 : ((-m.q) as 1 | -1) };
 }
 
-function rotateVec(v: Vec3, axis: Axis, q: number): Vec3 {
-  // rotação de q quartos de volta (positivo = anti-horário) em torno do eixo
-  let [x, y, z] = v;
-  const n = ((q % 4) + 4) % 4;
-  for (let i = 0; i < n; i++) {
-    if (axis === 0) [y, z] = [-z, y];
-    else if (axis === 1) [z, x] = [-x, z];
-    else [x, y] = [-y, x];
-  }
-  return [x + 0, y + 0, z + 0];
+const AXIS_FACES: Record<Axis, [Face, Face]> = { 0: ["R", "L"], 1: ["U", "D"], 2: ["F", "B"] };
+
+/** Face de referência do movimento e profundidade da camada (1 = face externa). */
+export function moveFace(n: number, m: Move): { face: Face; depth: number; turns: 1 | -1 | 2 } {
+  const [pos, neg] = AXIS_FACES[m.axis];
+  const face = m.layer >= 0 ? pos : neg;
+  const d = FACE_DEF[face];
+  const depth = (n - 1 - Math.abs(m.layer)) / 2 + 1;
+  const turns = m.q === 2 ? 2 : m.q === d.cw ? 1 : -1;
+  return { face, depth, turns };
 }
 
-/** Permutação de adesivos por movimento: perm[novoIndice] = indiceAntigo */
-const PERM_CACHE = new Map<string, number[]>();
-function permutationFor(m: Move): number[] {
-  const k = moveToString(m);
-  const cached = PERM_CACHE.get(k);
-  if (cached) return cached;
-  const def = BASE_MOVES[m.face];
-  const q = def.dir * (m.turns === 2 ? 2 : m.turns);
-  const perm = new Array<number>(54);
-  for (const f of FACELETS) {
-    if (f.pos[def.axis] === def.layer) {
-      const np = rotateVec(f.pos, def.axis, q);
-      const nn = rotateVec(f.normal, def.axis, q);
-      const ni = FACELET_BY_KEY.get(key(np, nn))!;
-      perm[ni] = f.index;
-    } else {
-      perm[f.index] = f.index;
-    }
+export function moveToString(n: number, m: Move): string {
+  const { face, depth, turns } = moveFace(n, m);
+  const suf = turns === -1 ? "'" : turns === 2 ? "2" : "";
+  if (n === 3 && depth === 2) {
+    // fatias do meio: M segue L, E segue D, S segue F
+    const [slice, ref] = m.axis === 0 ? ["M", "L"] : m.axis === 1 ? ["E", "D"] : ["S", "F"];
+    const d = FACE_DEF[ref as Face];
+    const t = m.q === 2 ? 2 : m.q === d.cw ? 1 : -1;
+    return slice + (t === -1 ? "'" : t === 2 ? "2" : "");
   }
-  PERM_CACHE.set(k, perm);
-  return perm;
+  return (depth > 1 ? depth : "") + face + suf;
 }
 
-export function applyMove(state: State, m: Move): State {
-  const perm = permutationFor(m);
-  return perm.map((old) => state[old]);
-}
-
-export function applyAlg(state: State, moves: Move[]): State {
-  return moves.reduce(applyMove, state);
-}
-
-export function isSolved(state: State): boolean {
-  for (let f = 0; f < 6; f++) {
-    for (let i = 1; i < 9; i++) if (state[f * 9 + i] !== state[f * 9]) return false;
-  }
-  return true;
-}
-
-export function randomScramble(length = 22): Move[] {
-  const out: Move[] = [];
-  const axisOf = (f: Face) => BASE_MOVES[f].axis;
-  while (out.length < length) {
-    const face = FACES[Math.floor(Math.random() * 6)];
-    const last = out[out.length - 1];
-    const prev = out[out.length - 2];
-    if (last && last.face === face) continue;
-    if (last && prev && axisOf(last.face) === axisOf(face) && prev.face === face) continue;
-    const turns = ([1, -1, 2] as const)[Math.floor(Math.random() * 3)];
-    out.push({ face, turns });
-  }
-  return out;
-}
-
-// ---------------------------------------------------------------------------
-// Validação (portada da conversão facelet → cubie do Kociemba)
-// ---------------------------------------------------------------------------
-
-const U = (n: number) => n - 1;
-const R = (n: number) => 9 + n - 1;
-const F = (n: number) => 18 + n - 1;
-const D = (n: number) => 27 + n - 1;
-const L = (n: number) => 36 + n - 1;
-const B = (n: number) => 45 + n - 1;
-
-const CORNER_FACELETS = [
-  [U(9), R(1), F(3)],
-  [U(7), F(1), L(3)],
-  [U(1), L(1), B(3)],
-  [U(3), B(1), R(3)],
-  [D(3), F(9), R(7)],
-  [D(1), L(9), F(7)],
-  [D(7), B(9), L(7)],
-  [D(9), R(9), B(7)],
-];
-const CORNER_FACES: Face[][] = [
-  ["U", "R", "F"],
-  ["U", "F", "L"],
-  ["U", "L", "B"],
-  ["U", "B", "R"],
-  ["D", "F", "R"],
-  ["D", "L", "F"],
-  ["D", "B", "L"],
-  ["D", "R", "B"],
-];
-const EDGE_FACELETS = [
-  [U(6), R(2)],
-  [U(8), F(2)],
-  [U(4), L(2)],
-  [U(2), B(2)],
-  [D(6), R(8)],
-  [D(2), F(8)],
-  [D(4), L(8)],
-  [D(8), B(8)],
-  [F(6), R(4)],
-  [F(4), L(6)],
-  [B(6), L(4)],
-  [B(4), R(6)],
-];
-const EDGE_FACES: Face[][] = [
-  ["U", "R"],
-  ["U", "F"],
-  ["U", "L"],
-  ["U", "B"],
-  ["D", "R"],
-  ["D", "F"],
-  ["D", "L"],
-  ["D", "B"],
-  ["F", "R"],
-  ["F", "L"],
-  ["B", "L"],
-  ["B", "R"],
-];
-
-const CORNER_NAMES = ["UFR", "UFL", "UBL", "UBR", "DFR", "DFL", "DBL", "DBR"];
-
-export interface ValidationResult {
-  ok: boolean;
-  errors: string[];
-  /** string de faces (URFDLB) pronta para o solver, quando ok */
-  faceString?: string;
-  /** adesivos problemáticos, para destacar na UI */
-  badFacelets: number[];
-}
-
-function parity(perm: number[]): number {
-  let p = 0;
-  for (let i = 0; i < perm.length; i++)
-    for (let j = i + 1; j < perm.length; j++) if (perm[i] > perm[j]) p ^= 1;
-  return p;
-}
-
-const colorLabel = (c: Sticker) => COLOR_NAME[c].toLowerCase();
-
-export function validate(state: State): ValidationResult {
-  const errors: string[] = [];
-  const bad = new Set<number>();
-
-  // 0. Tudo pintado
-  const missing = state.map((c, i) => (c === "X" ? i : -1)).filter((i) => i >= 0);
-  if (missing.length) {
-    errors.push(
-      `Faltam ${missing.length} adesivo${missing.length === 1 ? "" : "s"} para pintar.`,
-    );
-    return { ok: false, errors, badFacelets: [] };
-  }
-
-  // 1. Centros distintos
-  const centers = FACES.map((_, i) => state[i * 9 + 4] as ColorId);
-  const centerSet = new Set(centers);
-  if (centerSet.size !== 6) {
-    errors.push("Os 6 centros precisam ter cores diferentes.");
-    FACES.forEach((_, i) => bad.add(i * 9 + 4));
-    return { ok: false, errors, badFacelets: [...bad] };
-  }
-  const faceOfColor = new Map<ColorId, Face>(centers.map((c, i) => [c, FACES[i]]));
-
-  // 2. 9 adesivos de cada cor
-  for (const c of COLORS) {
-    const n = state.filter((s) => s === c.id).length;
-    if (n !== 9)
-      errors.push(`A cor ${colorLabel(c.id)} aparece ${n} vez${n === 1 ? "" : "es"} (precisa ser 9).`);
-  }
-  if (errors.length) return { ok: false, errors, badFacelets: [] };
-
-  const faceStr = state.map((c) => faceOfColor.get(c as ColorId)!);
-
-  // 3. Identifica cada peça
-  const cp: number[] = [];
-  let twist = 0;
-  const cornerSeen = new Array(8).fill(0);
-  for (let i = 0; i < 8; i++) {
-    const fl = CORNER_FACELETS[i];
-    let ori = 0;
-    for (ori = 0; ori < 3; ori++) if (faceStr[fl[ori]] === "U" || faceStr[fl[ori]] === "D") break;
-    if (ori === 3) {
-      errors.push(`A quina na posição ${CORNER_NAMES[i]} não tem adesivo de cima nem de baixo.`);
-      fl.forEach((x) => bad.add(x));
-      continue;
-    }
-    const c1 = faceStr[fl[(ori + 1) % 3]];
-    const c2 = faceStr[fl[(ori + 2) % 3]];
-    const j = CORNER_FACES.findIndex((cf) => cf[1] === c1 && cf[2] === c2);
-    if (j < 0) {
-      const cols = fl.map((x) => colorLabel(state[x])).join("/");
-      errors.push(`Quina impossível (${cols}) na posição ${CORNER_NAMES[i]}.`);
-      fl.forEach((x) => bad.add(x));
-      continue;
-    }
-    cp[i] = j;
-    cornerSeen[j]++;
-    twist += ori;
-  }
-  const ep: number[] = [];
-  let flip = 0;
-  const edgeSeen = new Array(12).fill(0);
-  for (let i = 0; i < 12; i++) {
-    const fl = EDGE_FACELETS[i];
-    const a = faceStr[fl[0]];
-    const b = faceStr[fl[1]];
-    let j = EDGE_FACES.findIndex((ef) => ef[0] === a && ef[1] === b);
-    let o = 0;
-    if (j < 0) {
-      j = EDGE_FACES.findIndex((ef) => ef[0] === b && ef[1] === a);
-      o = 1;
-    }
-    if (j < 0) {
-      const cols = fl.map((x) => colorLabel(state[x])).join("/");
-      errors.push(`Meio impossível (${cols}).`);
-      fl.forEach((x) => bad.add(x));
-      continue;
-    }
-    ep[i] = j;
-    edgeSeen[j]++;
-    flip += o;
-  }
-  if (errors.length) return { ok: false, errors, badFacelets: [...bad] };
-
-  if (cornerSeen.some((n) => n !== 1)) {
-    errors.push("Há quinas repetidas (alguma peça de canto aparece duas vezes).");
-    CORNER_FACELETS.forEach((fl, i) => {
-      if (cornerSeen[cp[i]] > 1) fl.forEach((x) => bad.add(x));
-    });
-  }
-  if (edgeSeen.some((n) => n !== 1)) {
-    errors.push("Há meios repetidos (alguma peça de aresta aparece duas vezes).");
-    EDGE_FACELETS.forEach((fl, i) => {
-      if (edgeSeen[ep[i]] > 1) fl.forEach((x) => bad.add(x));
-    });
-  }
-  if (errors.length) return { ok: false, errors, badFacelets: [...bad] };
-
-  if (twist % 3 !== 0)
-    errors.push(
-      "Uma quina está girada (torcida). Esse estado não tem solução: confira as cores das quinas.",
-    );
-  if (flip % 2 !== 0)
-    errors.push(
-      "Um meio está invertido. Esse estado não tem solução: confira as cores das arestas.",
-    );
-  if (parity(cp) !== parity(ep))
-    errors.push(
-      "Duas peças estão trocadas de lugar (paridade). Esse estado não tem solução: confira a pintura.",
-    );
-
-  return {
-    ok: errors.length === 0,
-    errors,
-    badFacelets: [...bad],
-    faceString: errors.length === 0 ? faceStr.join("") : undefined,
-  };
-}
-
-export const MOVE_HINT: Record<Face, string> = {
+const MOVE_HINT: Record<Face, string> = {
   U: "a face de cima",
   D: "a face de baixo",
   R: "a face da direita",
@@ -430,9 +212,110 @@ export const MOVE_HINT: Record<Face, string> = {
   B: "a face de trás",
 };
 
-export function describeMove(m: Move): string {
-  const what = MOVE_HINT[m.face];
-  if (m.turns === 2) return `Gire ${what} meia volta (180°).`;
-  const dir = m.turns === 1 ? "horário" : "anti-horário";
+export function describeMove(n: number, m: Move): string {
+  const { face, depth, turns } = moveFace(n, m);
+  const what = depth === 1 ? MOVE_HINT[face] : `a ${depth}ª camada a partir d${MOVE_HINT[face].slice(2)}`;
+  if (turns === 2) return `Gire ${what} meia volta (180°).`;
+  const dir = turns === 1 ? "horário" : "anti-horário";
   return `Gire ${what} 90° no sentido ${dir} (olhando de frente para essa face).`;
+}
+
+function rotateVec(v: Vec3, axis: Axis, q: number): Vec3 {
+  let [x, y, z] = v;
+  const k = ((q % 4) + 4) % 4;
+  for (let i = 0; i < k; i++) {
+    if (axis === 0) [y, z] = [-z, y];
+    else if (axis === 1) [z, x] = [-x, z];
+    else [x, y] = [-y, x];
+  }
+  return [x + 0, y + 0, z + 0];
+}
+
+const permCache = new Map<string, number[]>();
+/** perm[novoIndice] = indiceAntigo */
+export function permutationFor(n: number, m: Move): number[] {
+  const k = `${n}:${m.axis}:${m.layer}:${m.q}`;
+  const hit = permCache.get(k);
+  if (hit) return hit;
+  const { facelets, byKey } = geometry(n);
+  const perm = new Array<number>(facelets.length);
+  for (const f of facelets) {
+    if (f.pos[m.axis] === m.layer) {
+      const ni = byKey.get(key(rotateVec(f.pos, m.axis, m.q), rotateVec(f.normal, m.axis, m.q)))!;
+      perm[ni] = f.index;
+    } else perm[f.index] = f.index;
+  }
+  permCache.set(k, perm);
+  return perm;
+}
+
+export function applyMove(n: number, state: State, m: Move): State {
+  return permutationFor(n, m).map((old) => state[old]);
+}
+
+export function applyAlg(n: number, state: State, moves: Move[]): State {
+  return moves.reduce((s, m) => applyMove(n, s, m), state);
+}
+
+export function isSolved(n: number, state: State): boolean {
+  const k = n * n;
+  for (let f = 0; f < 6; f++)
+    for (let i = 1; i < k; i++) if (state[f * k + i] !== state[f * k] || state[f * k] === "X") return false;
+  return true;
+}
+
+export function randomScramble(n: number): Move[] {
+  const length = n === 2 ? 11 : n === 3 ? 22 : 20 + (n - 3) * 10;
+  const layers: number[] = [];
+  for (let l = -(n - 1); l <= n - 1; l += 2) layers.push(l);
+  // no 3x3 usamos só faces externas (embaralhamento "oficial")
+  const usable = n === 3 ? [-(n - 1), n - 1] : layers;
+  const out: Move[] = [];
+  while (out.length < length) {
+    const axis = Math.floor(Math.random() * 3) as Axis;
+    const layer = usable[Math.floor(Math.random() * usable.length)];
+    const last = out[out.length - 1];
+    if (last && last.axis === axis && last.layer === layer) continue;
+    // evita sequências longas no mesmo eixo
+    if (out.length >= 2 && out[out.length - 1].axis === axis && out[out.length - 2].axis === axis) continue;
+    const q = ([1, -1, 2] as const)[Math.floor(Math.random() * 3)];
+    out.push({ axis, layer, q });
+  }
+  return out;
+}
+
+// ---------------------------------------------------------------------------
+// Validação genérica (contagem) — 2x2 e 3x3 têm validação completa em módulos próprios
+// ---------------------------------------------------------------------------
+
+export interface ValidationResult {
+  ok: boolean;
+  errors: string[];
+  badFacelets: number[];
+  /** dado pronto para o solver (3x3: string URFDLB; 2x2: string de cores) */
+  solverInput?: string;
+}
+
+export function validateCounts(n: number, state: State): ValidationResult {
+  const errors: string[] = [];
+  const missing = state.filter((c) => c === "X").length;
+  if (missing) {
+    errors.push(`Faltam ${missing} adesivo${missing === 1 ? "" : "s"} para pintar.`);
+    return { ok: false, errors, badFacelets: [] };
+  }
+  const need = n * n;
+  for (const c of COLORS) {
+    const k = state.filter((s) => s === c.id).length;
+    if (k !== need)
+      errors.push(`A cor ${c.name.toLowerCase()} aparece ${k} vez${k === 1 ? "" : "es"} (precisa ser ${need}).`);
+  }
+  if (n % 2 === 1) {
+    const mid = (need - 1) / 2;
+    const centers = new Set(FACES.map((_, i) => state[i * need + mid]));
+    if (centers.size !== 6) {
+      errors.push("Os 6 centros precisam ter cores diferentes.");
+      return { ok: false, errors, badFacelets: FACES.map((_, i) => i * need + mid) };
+    }
+  }
+  return { ok: errors.length === 0, errors, badFacelets: [] };
 }

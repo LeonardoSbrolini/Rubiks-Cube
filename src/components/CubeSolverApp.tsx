@@ -1,46 +1,65 @@
 "use client";
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import MetalCube, { type ColorMode, type MetalCubeHandle } from "@/components/MetalCube";
+import MetalCube, { type MetalCubeHandle } from "@/components/MetalCube";
 import FaceNet from "@/components/FaceNet";
+import Confetti from "@/components/Confetti";
 import {
   applyAlg,
   applyMove,
   blankState,
-  COLOR_HEX,
   COLOR_NAME,
   COLORS,
   describeMove,
   FACES,
+  faceMove,
   invertMove,
   isSolved,
   moveToString,
   parseAlg,
   randomScramble,
+  SIZES,
   solvedState,
-  validate,
+  validateCounts,
   type Face,
   type Move,
   type State,
   type Sticker,
 } from "@/lib/cube";
-import { solveFaces, warmUpSolver } from "@/lib/solver";
+import { validate3 } from "@/lib/validate3";
+import { validate2 } from "@/lib/twoByTwo";
+import { solve, SOLVABLE_SIZES, warmUpSolver } from "@/lib/solver";
+import { THEMES, themeHex, type Theme } from "@/lib/themes";
 
-type Mode = "paint" | "solve";
-const STORAGE_KEY = "cubo-magico:state";
+type Tab = "paint" | "solve";
+const PREFS_KEY = "cubo-magico:prefs";
+const stateKey = (n: number) => `cubo-magico:state:${n}`;
 
-const MANUAL_MOVES: Move[] = FACES.flatMap((face) =>
-  ([1, -1, 2] as const).map((turns) => ({ face, turns })),
-);
+function validateFor(n: number, s: State) {
+  if (n === 2) return validate2(s);
+  if (n === 3) return validate3(s);
+  return validateCounts(n, s);
+}
+
+function loadState(n: number): State {
+  try {
+    const raw = localStorage.getItem(stateKey(n));
+    const arr = raw ? JSON.parse(raw) : null;
+    if (Array.isArray(arr) && arr.length === 6 * n * n) return arr;
+  } catch {}
+  return solvedState(n);
+}
 
 export default function CubeSolverApp() {
   const cubeRef = useRef<MetalCubeHandle>(null);
   const busy = useRef(false);
 
-  const [cube, setCube] = useState<State>(() => solvedState());
-  const [mode, setMode] = useState<Mode>("paint");
+  const [size, setSize] = useState(3);
+  const [themeId, setThemeId] = useState("classic");
+  const theme = THEMES.find((t) => t.id === themeId) ?? THEMES[0];
+  const [cube, setCube] = useState<State>(() => solvedState(3));
+  const [tab, setTab] = useState<Tab>("paint");
   const [brush, setBrush] = useState<Sticker>("W");
-  const [colorMode, setColorMode] = useState<ColorMode>("painted");
 
   const [solution, setSolution] = useState<Move[] | null>(null);
   const [step, setStep] = useState(0);
@@ -48,36 +67,66 @@ export default function CubeSolverApp() {
   const [solverError, setSolverError] = useState<string | null>(null);
   const [playing, setPlaying] = useState(false);
   const [speed, setSpeed] = useState(1);
-
-  // restaura a pintura salva
+  const [confetti, setConfetti] = useState(0);
+  const cubeNow = useRef(cube);
   useEffect(() => {
+    cubeNow.current = cube;
+  }, [cube]);
+
+  // ---------------- preferências salvas ----------------
+  useEffect(() => {
+    let n = 3;
     try {
-      const saved = localStorage.getItem(STORAGE_KEY);
-      if (saved) {
-        const arr = JSON.parse(saved);
-        // eslint-disable-next-line react-hooks/set-state-in-effect
-        if (Array.isArray(arr) && arr.length === 54) setCube(arr);
-      }
+      const p = JSON.parse(localStorage.getItem(PREFS_KEY) ?? "{}");
+      if (SIZES.includes(p.size)) n = p.size;
+      // eslint-disable-next-line react-hooks/set-state-in-effect
+      if (THEMES.some((t) => t.id === p.theme)) setThemeId(p.theme);
     } catch {}
-    warmUpSolver();
+    setSize(n);
+    setCube(loadState(n));
   }, []);
   useEffect(() => {
     try {
-      localStorage.setItem(STORAGE_KEY, JSON.stringify(cube));
+      localStorage.setItem(PREFS_KEY, JSON.stringify({ size, theme: themeId }));
     } catch {}
-  }, [cube]);
+    warmUpSolver(size);
+  }, [size, themeId]);
+  useEffect(() => {
+    try {
+      if (cube.length === 6 * size * size) localStorage.setItem(stateKey(size), JSON.stringify(cube));
+    } catch {}
+  }, [cube, size]);
 
-  const validation = useMemo(() => validate(cube), [cube]);
-  const solved = useMemo(() => isSolved(cube), [cube]);
+  const validation = useMemo(() => validateFor(size, cube), [size, cube]);
+  const solved = useMemo(() => isSolved(size, cube), [size, cube]);
+  const canSolve = SOLVABLE_SIZES.includes(size);
   const centers = useMemo(() => {
-    const c = Object.fromEntries(FACES.map((f, i) => [f, cube[i * 9 + 4]])) as Record<Face, Sticker>;
-    return c;
-  }, [cube]);
+    if (size % 2 === 0) return null;
+    const k = size * size;
+    return Object.fromEntries(FACES.map((f, i) => [f, cube[i * k + (k - 1) / 2]])) as Record<Face, Sticker>;
+  }, [cube, size]);
+
+  const celebrate = useCallback(() => {
+    cubeRef.current?.celebrate();
+    setConfetti((c) => c + 1);
+  }, []);
+
+  // ---------------- tamanho ----------------
+  const changeSize = (n: number) => {
+    if (n === size || busy.current) return;
+    setPlaying(false);
+    setSolution(null);
+    setStep(0);
+    setTab("paint");
+    setSolverError(null);
+    setSize(n);
+    setCube(loadState(n));
+  };
 
   // ---------------- pintura ----------------
   const paint = useCallback(
     (i: number) => {
-      if (mode !== "paint" || busy.current) return;
+      if (tab !== "paint" || busy.current) return;
       setCube((s) => {
         if (s[i] === brush) return s;
         const n = [...s];
@@ -85,29 +134,33 @@ export default function CubeSolverApp() {
         return n;
       });
     },
-    [brush, mode],
+    [brush, tab],
   );
 
   // ---------------- movimentos ----------------
   const runMove = useCallback(
-    async (m: Move) => {
+    async (m: Move, celebrateIfSolved = true) => {
       if (busy.current) return false;
       busy.current = true;
-      await cubeRef.current?.animateMove(m, 320 / speed);
-      setCube((s) => applyMove(s, m));
+      await cubeRef.current?.animateMove(m, 300 / speed);
+      const before = cubeNow.current;
+      const ns = applyMove(size, before, m);
+      const becameSolved = !isSolved(size, before) && isSolved(size, ns);
+      cubeNow.current = ns;
+      setCube(ns);
       busy.current = false;
+      if (becameSolved && celebrateIfSolved) celebrate();
       return true;
     },
-    [speed],
+    [speed, size, celebrate],
   );
 
   const manualMove = useCallback(
     async (m: Move) => {
       if (solution) {
-        // girar à mão invalida a solução atual
         setSolution(null);
         setPlaying(false);
-        setMode("paint");
+        setTab("paint");
       }
       await runMove(m);
     },
@@ -121,21 +174,21 @@ export default function CubeSolverApp() {
 
   const prev = useCallback(async () => {
     if (!solution || step <= 0) return;
-    if (await runMove(invertMove(solution[step - 1]))) setStep((s) => s - 1);
+    if (await runMove(invertMove(solution[step - 1]), false)) setStep((s) => s - 1);
   }, [runMove, solution, step]);
 
   const jumpTo = useCallback(
     (target: number) => {
       if (!solution || busy.current) return;
       setPlaying(false);
-      const base = applyAlg(cube, solution.slice(0, step).map(invertMove).reverse());
-      setCube(applyAlg(base, solution.slice(0, target)));
+      const base = applyAlg(size, cube, solution.slice(0, step).map(invertMove).reverse());
+      setCube(applyAlg(size, base, solution.slice(0, target)));
       setStep(target);
+      if (target === solution.length && target > 0) celebrate();
     },
-    [cube, solution, step],
+    [cube, solution, step, size, celebrate],
   );
 
-  // reprodução automática
   useEffect(() => {
     if (!playing || !solution) return;
     if (step >= solution.length) {
@@ -143,18 +196,17 @@ export default function CubeSolverApp() {
       setPlaying(false);
       return;
     }
-    const t = setTimeout(next, 120 / speed);
+    const t = setTimeout(next, 140 / speed);
     return () => clearTimeout(t);
   }, [playing, step, solution, next, speed]);
 
-  // atalhos de teclado: U R F D L B (Shift = anti-horário), ←/→ passo a passo, espaço = play
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
       if ((e.target as HTMLElement)?.tagName === "INPUT") return;
       const k = e.key.toUpperCase();
-      if (FACES.includes(k as Face) && !e.metaKey && !e.ctrlKey) {
+      if (FACES.includes(k as Face) && !e.metaKey && !e.ctrlKey && !e.altKey) {
         e.preventDefault();
-        manualMove({ face: k as Face, turns: e.shiftKey ? -1 : 1 });
+        manualMove(faceMove(size, k as Face, e.shiftKey ? -1 : 1));
       } else if (solution && e.key === "ArrowRight") {
         e.preventDefault();
         setPlaying(false);
@@ -170,27 +222,26 @@ export default function CubeSolverApp() {
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
-  }, [manualMove, next, prev, solution]);
+  }, [manualMove, next, prev, solution, size]);
 
   // ---------------- resolver ----------------
-  const solve = async () => {
-    if (!validation.ok || !validation.faceString) return;
+  const runSolver = async () => {
+    if (!validation.ok || !validation.solverInput || !canSolve) return;
     setSolverError(null);
     if (solved) {
       setSolution([]);
       setStep(0);
-      setMode("solve");
+      setTab("solve");
       return;
     }
     setSolving(true);
     try {
-      const sol = await solveFaces(validation.faceString);
-      const moves = parseAlg(sol);
-      // confere a solução antes de mostrar
-      if (!isSolved(applyAlg(cube, moves))) throw new Error("A solução calculada não conferiu.");
+      const sol = await solve(size, validation.solverInput);
+      const moves = parseAlg(size, sol);
+      if (!isSolved(size, applyAlg(size, cube, moves))) throw new Error("A solução calculada não conferiu.");
       setSolution(moves);
       setStep(0);
-      setMode("solve");
+      setTab("solve");
     } catch (e) {
       setSolverError(e instanceof Error ? e.message : String(e));
     } finally {
@@ -200,207 +251,296 @@ export default function CubeSolverApp() {
 
   const backToPaint = () => {
     setPlaying(false);
-    if (solution) {
-      // volta para o estado que foi pintado
-      setCube((s) => applyAlg(s, solution.slice(0, step).map(invertMove).reverse()));
-    }
+    if (solution) setCube((s) => applyAlg(size, s, solution.slice(0, step).map(invertMove).reverse()));
     setSolution(null);
     setStep(0);
-    setMode("paint");
+    setTab("paint");
   };
 
+  const scramble = () => {
+    if (busy.current) return;
+    setSolution(null);
+    setPlaying(false);
+    setTab("paint");
+    setCube(applyAlg(size, solvedState(size), randomScramble(size)));
+  };
+
+  const manualMoves = useMemo(
+    () => FACES.flatMap((f) => ([1, -1, 2] as const).map((t) => faceMove(size, f, t))),
+    [size],
+  );
   const current = solution && step < solution.length ? solution[step] : null;
+  const finished = !!solution && step >= solution.length;
+  const palette = [...COLORS.map((c) => c.id as Sticker), "X" as Sticker];
+  const accent = theme.accent;
 
   return (
-    <div className="min-h-screen bg-zinc-950 text-zinc-100">
-      <header className="mx-auto flex max-w-7xl items-center justify-between gap-4 px-4 pt-6 sm:px-6">
-        <div>
-          <h1 className="text-2xl font-semibold tracking-tight sm:text-3xl">Cubo Mágico</h1>
-          <p className="text-sm text-zinc-400">Pinte o seu cubo, resolva e siga o passo a passo.</p>
+    <div
+      className="relative flex h-dvh flex-col overflow-hidden bg-[#06060a] text-zinc-100"
+      style={{ ["--accent" as string]: accent }}
+    >
+      <Aurora theme={theme} />
+
+      {/* ------------------------------------------------ topo */}
+      <header className="relative z-20 flex shrink-0 flex-wrap items-center gap-x-4 gap-y-2 px-4 pt-3 pb-2 lg:px-6 lg:pt-4">
+        <div className="flex items-center gap-3">
+          <Logo theme={theme} />
+          <div className="leading-tight">
+            <h1 className="text-lg font-semibold tracking-tight">Cubo Mágico</h1>
+            <p className="hidden text-xs text-zinc-400 sm:block">Sincronize, resolva e aprenda</p>
+          </div>
         </div>
-        <div className="flex rounded-full border border-zinc-800 bg-zinc-900 p-1 text-xs">
-          {(["painted", "metallic"] as const).map((m) => (
+
+        <div className="order-3 w-full sm:order-none sm:mx-auto sm:w-auto">
+          <Segmented
+            value={size}
+            onChange={changeSize}
+            options={SIZES.map((n) => ({ value: n, label: `${n}×${n}` }))}
+          />
+        </div>
+
+        <div className="ml-auto flex items-center gap-1.5 sm:ml-0">
+          {THEMES.map((t) => (
             <button
-              key={m}
-              onClick={() => setColorMode(m)}
-              className={`rounded-full px-3 py-1.5 transition ${
-                colorMode === m ? "bg-zinc-100 text-zinc-900" : "text-zinc-400 hover:text-zinc-100"
+              key={t.id}
+              onClick={() => setThemeId(t.id)}
+              title={t.name}
+              aria-label={`Variação ${t.name}`}
+              className={`group relative h-8 w-8 rounded-full p-[3px] transition ${
+                t.id === themeId ? "ring-2 ring-[var(--accent)]" : "ring-1 ring-white/10 hover:ring-white/40"
               }`}
             >
-              {m === "painted" ? "Adesivos" : "Metálico"}
+              <ThemeSwatch t={t} />
+              <span className="pointer-events-none absolute top-10 left-1/2 z-50 -translate-x-1/2 rounded-md bg-black/80 px-2 py-1 text-[11px] whitespace-nowrap opacity-0 transition group-hover:opacity-100">
+                {t.name}
+              </span>
             </button>
           ))}
         </div>
       </header>
 
-      <main className="mx-auto grid max-w-7xl gap-6 px-4 py-6 sm:px-6 lg:grid-cols-[minmax(0,1fr)_420px]">
-        {/* ---------------- cubo 3D ---------------- */}
-        <section className="relative overflow-hidden rounded-3xl border border-zinc-800 bg-[radial-gradient(ellipse_at_top,#27272a_0%,#09090b_70%)]">
+      {/* ------------------------------------------------ conteúdo */}
+      <main className="relative z-10 flex min-h-0 flex-1 flex-col gap-3 px-3 pb-3 lg:grid lg:grid-cols-[minmax(0,1fr)_400px] lg:gap-4 lg:px-6 lg:pb-5">
+        {/* palco 3D */}
+        <section className="glass relative h-[46dvh] shrink-0 overflow-hidden rounded-[28px] lg:h-auto">
           <MetalCube
             ref={cubeRef}
+            size={size}
             state={cube}
-            colorMode={colorMode}
-            tint="#d4d4d8"
-            highlight={mode === "paint" ? validation.badFacelets : undefined}
-            onStickerClick={mode === "paint" ? paint : undefined}
-            className="h-[52vh] min-h-[340px] w-full cursor-grab active:cursor-grabbing lg:h-[calc(100vh-220px)]"
+            theme={theme}
+            highlight={tab === "paint" ? validation.badFacelets : undefined}
+            onStickerClick={tab === "paint" ? paint : undefined}
+            onTurn={manualMove}
+            className="absolute inset-0"
           />
-          <div className="pointer-events-none absolute left-4 top-4 hidden rounded-xl sm:block bg-black/50 px-3 py-2 text-xs text-zinc-300 backdrop-blur">
-            {mode === "paint"
-              ? "Arraste para girar a vista · clique num adesivo para pintar"
-              : "Arraste para girar a vista"}
-          </div>
-          <button
-            onClick={() => cubeRef.current?.resetView()}
-            className="absolute right-4 top-4 rounded-xl bg-black/50 px-3 py-2 text-xs text-zinc-300 backdrop-blur hover:text-white"
-          >
-            Centralizar vista
-          </button>
+          <Confetti fire={confetti} colors={COLORS.map((c) => themeHex(theme, c.id))} />
 
-          {current && (
-            <div className="absolute inset-x-4 bottom-4 flex items-center gap-4 rounded-2xl bg-black/60 p-4 backdrop-blur">
-              <div className="flex h-16 w-16 shrink-0 items-center justify-center rounded-xl bg-zinc-100 font-mono text-3xl font-bold text-zinc-900">
-                {moveToString(current)}
+          <div className="pointer-events-none absolute top-4 left-4 flex flex-wrap gap-2">
+            <Chip>
+              <span className="h-1.5 w-1.5 rounded-full bg-[var(--accent)] shadow-[0_0_8px_var(--accent)]" />
+              {size}×{size} · {theme.name}
+            </Chip>
+            <Chip className="hidden md:flex">
+              {tab === "paint" ? "Clique para pintar · arraste o cubo para girar camadas" : "Arraste o fundo para mudar a vista"}
+            </Chip>
+          </div>
+          <div className="absolute top-4 right-4 flex gap-2">
+            <IconButton label="Centralizar vista" onClick={() => cubeRef.current?.resetView()}>
+              <svg viewBox="0 0 24 24" className="h-4 w-4" fill="none" stroke="currentColor" strokeWidth="2">
+                <circle cx="12" cy="12" r="3" />
+                <path d="M12 2v3M12 19v3M2 12h3M19 12h3" />
+              </svg>
+            </IconButton>
+            <IconButton label="Embaralhar" onClick={scramble}>
+              <svg viewBox="0 0 24 24" className="h-4 w-4" fill="none" stroke="currentColor" strokeWidth="2">
+                <path d="M16 3h5v5M4 20 21 3M21 16v5h-5M15 15l6 6M4 4l5 5" />
+              </svg>
+            </IconButton>
+          </div>
+
+          {/* dock inferior */}
+          <div className="absolute inset-x-3 bottom-3 flex justify-center">
+            {tab === "paint" ? (
+              <div className="glass-strong flex items-center gap-1.5 rounded-full p-1.5 sm:gap-2 sm:p-2">
+                {palette.map((c) => (
+                  <button
+                    key={c}
+                    onClick={() => setBrush(c)}
+                    title={COLOR_NAME[c]}
+                    aria-label={`Cor ${COLOR_NAME[c]}`}
+                    className={`relative h-8 w-8 rounded-full transition-all duration-200 sm:h-10 sm:w-10 ${
+                      brush === c ? "scale-110 ring-2 ring-white ring-offset-2 ring-offset-black/60" : "hover:scale-105"
+                    }`}
+                    style={{
+                      background: themeHex(theme, c),
+                      boxShadow: brush === c ? `0 0 22px ${themeHex(theme, c)}` : undefined,
+                    }}
+                  >
+                    {c === "X" && <span className="text-xs text-zinc-300">✕</span>}
+                  </button>
+                ))}
               </div>
-              <div className="text-sm text-zinc-200">
-                <div className="text-xs uppercase tracking-wide text-zinc-400">
-                  Passo {step + 1} de {solution!.length}
+            ) : (
+              <div className="glass-strong flex w-full max-w-2xl items-center gap-3 rounded-3xl p-2.5 sm:gap-4 sm:p-3">
+                <div
+                  key={step}
+                  className="move-pop flex h-14 w-14 shrink-0 items-center justify-center rounded-2xl font-mono text-2xl font-bold text-zinc-950 sm:h-16 sm:w-16 sm:text-3xl"
+                  style={{ background: finished ? "#34d399" : "var(--accent)" }}
+                >
+                  {current ? moveToString(size, current) : "✓"}
                 </div>
-                {describeMove(current)}
+                <div className="min-w-0 flex-1">
+                  <div className="text-[11px] tracking-wider text-zinc-400 uppercase">
+                    {finished ? "Concluído" : `Passo ${step + 1} de ${solution!.length}`}
+                  </div>
+                  <div className="truncate text-sm text-zinc-100 sm:whitespace-normal">
+                    {current
+                      ? describeMove(size, current)
+                      : solution!.length === 0
+                        ? "O cubo já está resolvido!"
+                        : "Pronto! Cubo resolvido 🎉"}
+                  </div>
+                  <div className="mt-2 h-1 overflow-hidden rounded-full bg-white/10">
+                    <div
+                      className="h-full rounded-full bg-[var(--accent)] transition-all duration-300"
+                      style={{ width: `${solution!.length ? (step / solution!.length) * 100 : 100}%` }}
+                    />
+                  </div>
+                </div>
+                <div className="flex shrink-0 gap-1.5">
+                  <Ctrl label="Anterior" onClick={() => (setPlaying(false), prev())} disabled={step === 0}>
+                    <path d="M15 6 9 12l6 6" />
+                  </Ctrl>
+                  <Ctrl label={playing ? "Pausar" : "Reproduzir"} onClick={() => setPlaying((p) => !p)} disabled={finished} primary>
+                    {playing ? <path d="M9 6v12M15 6v12" /> : <path d="M8 5v14l11-7z" fill="currentColor" />}
+                  </Ctrl>
+                  <Ctrl label="Próximo" onClick={() => (setPlaying(false), next())} disabled={finished}>
+                    <path d="m9 6 6 6-6 6" />
+                  </Ctrl>
+                </div>
               </div>
-            </div>
-          )}
-          {solution && step >= solution.length && (
-            <div className="absolute inset-x-4 bottom-4 rounded-2xl bg-emerald-500/90 p-4 text-center font-medium text-emerald-950">
-              {solution.length === 0 ? "O cubo já está resolvido!" : "Pronto! Cubo resolvido 🎉"}
-            </div>
-          )}
+            )}
+          </div>
         </section>
 
-        {/* ---------------- painel ---------------- */}
-        <aside className="flex flex-col gap-4">
-          {mode === "paint" ? (
-            <>
-              <Card title="1. Sincronize o seu cubo">
-                <p className="mb-3 text-sm text-zinc-400">
-                  Escolha uma cor e clique nos adesivos (no cubo 3D ou na planificação) até ficar igual ao
-                  seu. Segure o seu cubo com o centro{" "}
-                  <ColorWord c={centers.U} /> em cima e o <ColorWord c={centers.F} /> de frente.
-                </p>
-                <div className="mb-4 flex flex-wrap gap-2">
-                  {[...COLORS.map((c) => c.id as Sticker), "X" as Sticker].map((c) => (
-                    <button
-                      key={c}
-                      onClick={() => setBrush(c)}
-                      title={COLOR_NAME[c]}
-                      className={`h-10 w-10 rounded-xl border-2 transition ${
-                        brush === c ? "scale-110 border-white" : "border-transparent opacity-80 hover:opacity-100"
-                      }`}
-                      style={{ background: COLOR_HEX[c] }}
-                    >
-                      {c === "X" && <span className="text-xs text-zinc-300">✕</span>}
-                    </button>
-                  ))}
-                </div>
-                <FaceNet state={cube} onPaint={paint} highlight={validation.badFacelets} />
-                <div className="mt-4 flex flex-wrap gap-2 text-xs">
-                  <SmallButton onClick={() => setCube(blankState())}>Começar do zero</SmallButton>
-                  <SmallButton onClick={() => setCube(solvedState())}>Cubo resolvido</SmallButton>
-                  <SmallButton onClick={() => setCube(applyAlg(solvedState(), randomScramble()))}>
-                    Embaralhar (teste)
-                  </SmallButton>
-                </div>
-              </Card>
+        {/* painel */}
+        <aside className="flex min-h-0 flex-1 flex-col gap-3 overflow-y-auto lg:overflow-hidden">
+          <div className="glass flex shrink-0 rounded-2xl p-1">
+            {(["paint", "solve"] as const).map((t) => (
+              <button
+                key={t}
+                onClick={() => (t === "solve" ? solution && setTab("solve") : setTab("paint"))}
+                disabled={t === "solve" && !solution}
+                className={`flex-1 rounded-xl py-2 text-sm font-medium transition disabled:opacity-40 ${
+                  tab === t ? "bg-white/10 text-white shadow-inner" : "text-zinc-400 hover:text-zinc-100"
+                }`}
+              >
+                {t === "paint" ? "1 · Sincronizar" : "2 · Solução"}
+              </button>
+            ))}
+          </div>
 
-              <Card title="2. Validação">
+          {tab === "paint" ? (
+            <div className="glass flex shrink-0 flex-col gap-3 rounded-3xl p-4 lg:min-h-0 lg:flex-1 lg:shrink">
+              <p className="text-[13px] leading-snug text-zinc-400">
+                {centers ? (
+                  <>
+                    Pinte igual ao seu cubo segurando o centro <ColorWord c={centers.U} theme={theme} /> em cima e o{" "}
+                    <ColorWord c={centers.F} theme={theme} /> de frente.
+                  </>
+                ) : (
+                  <>Pinte igual ao seu cubo e mantenha-o na mesma posição em que você pintou.</>
+                )}
+              </p>
+              <div className="flex items-center lg:min-h-0 lg:flex-1">
+                <FaceNet size={size} state={cube} theme={theme} onPaint={paint} highlight={validation.badFacelets} />
+              </div>
+              <div className="flex flex-wrap gap-1.5 text-xs">
+                <Pill onClick={() => setCube(blankState(size))}>Começar do zero</Pill>
+                <Pill onClick={() => setCube(solvedState(size))}>Resolvido</Pill>
+                <Pill onClick={scramble}>Embaralhar</Pill>
+              </div>
+
+              <div className="rounded-2xl bg-black/25 p-3">
                 {validation.ok ? (
-                  <p className="text-sm text-emerald-400">
-                    ✓ Estado válido{solved ? " (já resolvido)" : ""}. Pode resolver!
+                  <p className="flex items-center gap-2 text-sm text-emerald-400">
+                    <span className="inline-block h-2 w-2 rounded-full bg-emerald-400 shadow-[0_0_10px_#34d399]" />
+                    Estado válido{solved ? " (já resolvido)" : ""}.
                   </p>
                 ) : (
-                  <ul className="space-y-1 text-sm text-amber-300">
+                  <ul className="max-h-20 space-y-0.5 overflow-y-auto text-[13px] text-amber-300">
                     {validation.errors.map((e) => (
                       <li key={e}>• {e}</li>
                     ))}
                   </ul>
                 )}
-                {solverError && <p className="mt-2 text-sm text-red-400">{solverError}</p>}
-                <button
-                  onClick={solve}
-                  disabled={!validation.ok || solving}
-                  className="mt-4 w-full rounded-xl bg-zinc-100 py-3 font-semibold text-zinc-900 transition hover:bg-white disabled:cursor-not-allowed disabled:opacity-40"
-                >
-                  {solving ? "Calculando solução…" : "Resolver"}
-                </button>
-              </Card>
-            </>
+                {!canSolve && (
+                  <p className="mt-1 text-xs text-zinc-500">
+                    O passo a passo automático está disponível para 2×2 e 3×3. No {size}×{size} dá para pintar, embaralhar e girar livremente.
+                  </p>
+                )}
+                {solverError && <p className="mt-1 text-sm text-red-400">{solverError}</p>}
+              </div>
+
+              <button
+                onClick={runSolver}
+                disabled={!validation.ok || solving || !canSolve}
+                className="shine relative shrink-0 overflow-hidden rounded-2xl py-3 font-semibold text-zinc-950 transition enabled:hover:brightness-110 enabled:active:scale-[.98] disabled:cursor-not-allowed disabled:opacity-35"
+                style={{ background: "linear-gradient(135deg, var(--accent), #ffffff)" }}
+              >
+                {solving ? (
+                  <span className="inline-flex items-center gap-2">
+                    <span className="h-4 w-4 animate-spin rounded-full border-2 border-zinc-900/30 border-t-zinc-900" />
+                    Calculando…
+                  </span>
+                ) : (
+                  "Resolver"
+                )}
+              </button>
+            </div>
           ) : (
-            <Card title="Solução">
-              <p className="mb-3 text-sm text-zinc-400">
-                {solution!.length} movimentos. Mantenha o centro <ColorWord c={centers.U} /> em cima e o{" "}
-                <ColorWord c={centers.F} /> de frente durante toda a solução.
+            <div className="glass flex shrink-0 flex-col gap-3 rounded-3xl p-4 lg:min-h-0 lg:flex-1 lg:shrink">
+              <div className="flex items-baseline justify-between">
+                <h2 className="text-sm font-semibold">{solution!.length} movimentos</h2>
+                <span className="text-xs text-zinc-500">← → passo · espaço play</span>
+              </div>
+              <p className="text-[13px] text-zinc-400">
+                {centers ? (
+                  <>
+                    Mantenha o centro <ColorWord c={centers.U} theme={theme} /> em cima e o{" "}
+                    <ColorWord c={centers.F} theme={theme} /> de frente o tempo todo.
+                  </>
+                ) : (
+                  <>Mantenha o cubo na mesma posição em que você pintou.</>
+                )}
               </p>
-              <div className="mb-4 flex flex-wrap gap-1.5">
+              <div className="flex max-h-40 flex-wrap content-start gap-1.5 overflow-y-auto pr-1 lg:max-h-none lg:min-h-0 lg:flex-1">
                 {solution!.map((m, i) => (
                   <button
                     key={i}
                     onClick={() => jumpTo(i)}
                     title={`Ir para o passo ${i + 1}`}
-                    className={`min-w-10 rounded-lg px-2 py-1 font-mono text-sm transition ${
+                    className={`h-9 min-w-11 rounded-xl px-2 font-mono text-sm transition-all duration-200 ${
                       i === step
-                        ? "bg-zinc-100 text-zinc-900"
+                        ? "scale-110 bg-[var(--accent)] text-zinc-950 shadow-[0_0_18px_var(--accent)]"
                         : i < step
-                          ? "bg-emerald-900/60 text-emerald-300"
-                          : "bg-zinc-800 text-zinc-300 hover:bg-zinc-700"
+                          ? "bg-emerald-500/15 text-emerald-300"
+                          : "bg-white/5 text-zinc-300 hover:bg-white/10"
                     }`}
                   >
-                    {moveToString(m)}
+                    {moveToString(size, m)}
                   </button>
                 ))}
               </div>
-              <div className="mb-3 h-1.5 overflow-hidden rounded-full bg-zinc-800">
-                <div
-                  className="h-full bg-emerald-400 transition-all"
-                  style={{ width: `${solution!.length ? (step / solution!.length) * 100 : 100}%` }}
-                />
+              <div className="flex gap-2">
+                <Pill onClick={() => jumpTo(0)} disabled={step === 0}>
+                  ⏮ Início
+                </Pill>
+                <Pill onClick={() => jumpTo(solution!.length)} disabled={finished}>
+                  Fim ⏭
+                </Pill>
               </div>
-              <div className="grid grid-cols-5 gap-2">
-                <CtrlButton label="Início" onClick={() => jumpTo(0)} disabled={step === 0}>
-                  ⏮
-                </CtrlButton>
-                <CtrlButton
-                  label="Anterior"
-                  onClick={() => {
-                    setPlaying(false);
-                    prev();
-                  }}
-                  disabled={step === 0}
-                >
-                  ◀
-                </CtrlButton>
-                <CtrlButton
-                  label={playing ? "Pausar" : "Reproduzir"}
-                  onClick={() => setPlaying((p) => !p)}
-                  disabled={step >= solution!.length}
-                  primary
-                >
-                  {playing ? "⏸" : "▶"}
-                </CtrlButton>
-                <CtrlButton
-                  label="Próximo"
-                  onClick={() => {
-                    setPlaying(false);
-                    next();
-                  }}
-                  disabled={step >= solution!.length}
-                >
-                  ▶︎▏
-                </CtrlButton>
-                <CtrlButton label="Fim" onClick={() => jumpTo(solution!.length)} disabled={step >= solution!.length}>
-                  ⏭
-                </CtrlButton>
-              </div>
-              <label className="mt-4 flex items-center gap-3 text-xs text-zinc-400">
+              <label className="flex items-center gap-3 text-xs text-zinc-400">
                 Velocidade
                 <input
                   type="range"
@@ -409,63 +549,147 @@ export default function CubeSolverApp() {
                   step={0.25}
                   value={speed}
                   onChange={(e) => setSpeed(Number(e.target.value))}
-                  className="flex-1 accent-zinc-100"
+                  className="flex-1 accent-[var(--accent)]"
                 />
                 <span className="w-10 text-right font-mono">{speed}×</span>
               </label>
-              <p className="mt-3 text-xs text-zinc-500">Atalhos: ← → passo a passo, espaço reproduz/pausa.</p>
               <button
                 onClick={backToPaint}
-                className="mt-4 w-full rounded-xl border border-zinc-700 py-2.5 text-sm text-zinc-300 hover:bg-zinc-800"
+                className="rounded-2xl border border-white/10 py-2.5 text-sm text-zinc-300 transition hover:bg-white/5"
               >
                 Voltar para a pintura
               </button>
-            </Card>
+            </div>
           )}
 
-          <Card title="Girar manualmente">
-            <div className="grid grid-cols-6 gap-1.5">
-              {MANUAL_MOVES.map((m) => (
+          <div className="glass shrink-0 rounded-3xl p-3">
+            <div className="mb-2 flex items-center justify-between px-1">
+              <h2 className="text-xs font-semibold tracking-wider text-zinc-400 uppercase">Girar</h2>
+              <span className="text-[11px] text-zinc-500">teclas U R F D L B · Shift = &apos;</span>
+            </div>
+            <div className="grid grid-cols-6 gap-1">
+              {manualMoves.map((m) => (
                 <button
-                  key={moveToString(m)}
+                  key={`${m.axis}${m.layer}${m.q}`}
                   onClick={() => manualMove(m)}
-                  title={describeMove(m)}
-                  className="rounded-lg bg-zinc-800 py-2 font-mono text-sm text-zinc-200 transition hover:bg-zinc-700 active:scale-95"
+                  title={describeMove(size, m)}
+                  className="rounded-lg bg-white/5 py-1.5 font-mono text-[13px] text-zinc-200 transition hover:bg-white/12 active:scale-95"
                 >
-                  {moveToString(m)}
+                  {moveToString(size, m)}
                 </button>
               ))}
             </div>
-            <p className="mt-3 text-xs text-zinc-500">
-              Teclado: U R F D L B (Shift = anti-horário).
-              {solution ? " Girar à mão encerra a solução atual." : ""}
-            </p>
-          </Card>
+          </div>
         </aside>
       </main>
     </div>
   );
 }
 
-function Card({ title, children }: { title: string; children: React.ReactNode }) {
+// ---------------------------------------------------------------- peças de UI
+
+function Aurora({ theme }: { theme: Theme }) {
   return (
-    <div className="rounded-3xl border border-zinc-800 bg-zinc-900/60 p-5">
-      <h2 className="mb-3 text-sm font-semibold uppercase tracking-wide text-zinc-300">{title}</h2>
+    <div aria-hidden className="pointer-events-none absolute inset-0 overflow-hidden">
+      <div
+        className="aurora absolute -top-1/3 -left-1/4 h-[70vmax] w-[70vmax] rounded-full opacity-25 blur-[120px]"
+        style={{ background: theme.accent }}
+      />
+      <div
+        className="aurora aurora-2 absolute -right-1/4 -bottom-1/3 h-[60vmax] w-[60vmax] rounded-full opacity-20 blur-[120px]"
+        style={{ background: "#6366f1" }}
+      />
+      <div className="grid-bg absolute inset-0 opacity-[0.07]" />
+    </div>
+  );
+}
+
+function Logo({ theme }: { theme: Theme }) {
+  const cols = ["W", "R", "G", "Y", "B", "O", "G", "W", "R"] as const;
+  return (
+    <div className="logo grid h-9 w-9 grid-cols-3 gap-[2px] rounded-xl bg-black/60 p-[3px] ring-1 ring-white/10">
+      {cols.map((c, i) => (
+        <span key={i} className="rounded-[3px]" style={{ background: themeHex(theme, c) }} />
+      ))}
+    </div>
+  );
+}
+
+function ThemeSwatch({ t }: { t: Theme }) {
+  const cols = (["R", "G", "B", "Y"] as const).map((c) => themeHex(t, c));
+  return (
+    <span
+      className="block h-full w-full overflow-hidden rounded-full"
+      style={{
+        background: `conic-gradient(${cols[0]} 0 25%, ${cols[1]} 0 50%, ${cols[2]} 0 75%, ${cols[3]} 0)`,
+        boxShadow: `inset 0 0 0 3px ${t.body.color}`,
+      }}
+    />
+  );
+}
+
+function Segmented({
+  value,
+  onChange,
+  options,
+}: {
+  value: number;
+  onChange: (v: number) => void;
+  options: { value: number; label: string }[];
+}) {
+  const idx = options.findIndex((o) => o.value === value);
+  return (
+    <div className="glass relative grid rounded-2xl p-1" style={{ gridTemplateColumns: `repeat(${options.length}, minmax(0,1fr))` }}>
+      <span
+        className="absolute top-1 bottom-1 left-1 rounded-xl bg-white/12 shadow-[0_0_20px_-4px_var(--accent)] ring-1 ring-white/15 transition-transform duration-300 ease-[cubic-bezier(.3,1.4,.5,1)]"
+        style={{ width: `calc((100% - 8px) / ${options.length})`, transform: `translateX(${idx * 100}%)` }}
+      />
+      {options.map((o) => (
+        <button
+          key={o.value}
+          onClick={() => onChange(o.value)}
+          className={`relative z-10 px-3 py-1.5 font-mono text-sm transition sm:px-4 ${
+            o.value === value ? "text-white" : "text-zinc-400 hover:text-zinc-200"
+          }`}
+        >
+          {o.label}
+        </button>
+      ))}
+    </div>
+  );
+}
+
+function Chip({ children, className = "" }: { children: React.ReactNode; className?: string }) {
+  return (
+    <div className={`glass-strong flex items-center gap-2 rounded-full px-3 py-1.5 text-xs text-zinc-200 ${className}`}>
       {children}
     </div>
   );
 }
 
-function SmallButton(props: React.ButtonHTMLAttributes<HTMLButtonElement>) {
+function IconButton({ children, label, onClick }: { children: React.ReactNode; label: string; onClick: () => void }) {
+  return (
+    <button
+      onClick={onClick}
+      title={label}
+      aria-label={label}
+      className="glass-strong flex h-9 w-9 items-center justify-center rounded-full text-zinc-300 transition hover:scale-105 hover:text-white active:scale-95"
+    >
+      {children}
+    </button>
+  );
+}
+
+function Pill(props: React.ButtonHTMLAttributes<HTMLButtonElement>) {
   return (
     <button
       {...props}
-      className="rounded-lg border border-zinc-700 px-3 py-1.5 text-zinc-300 transition hover:bg-zinc-800"
+      className="flex-1 rounded-xl bg-white/5 px-3 py-2 text-xs text-zinc-300 ring-1 ring-white/10 transition hover:bg-white/10 hover:text-white active:scale-[.97] disabled:opacity-30"
     />
   );
 }
 
-function CtrlButton({
+function Ctrl({
   children,
   label,
   primary,
@@ -476,19 +700,21 @@ function CtrlButton({
       {...rest}
       title={label}
       aria-label={label}
-      className={`rounded-xl py-3 text-lg transition disabled:opacity-30 ${
-        primary ? "bg-zinc-100 text-zinc-900 hover:bg-white" : "bg-zinc-800 text-zinc-200 hover:bg-zinc-700"
+      className={`flex h-11 w-11 items-center justify-center rounded-2xl transition active:scale-90 disabled:opacity-30 sm:h-12 sm:w-12 ${
+        primary ? "bg-white text-zinc-950 hover:brightness-110" : "bg-white/8 text-zinc-100 hover:bg-white/15"
       }`}
     >
-      {children}
+      <svg viewBox="0 0 24 24" className="h-5 w-5" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round">
+        {children}
+      </svg>
     </button>
   );
 }
 
-function ColorWord({ c }: { c: Sticker }) {
+function ColorWord({ c, theme }: { c: Sticker; theme: Theme }) {
   return (
-    <span className="inline-flex items-center gap-1 font-medium text-zinc-200">
-      <span className="inline-block h-3 w-3 rounded-sm" style={{ background: COLOR_HEX[c] }} />
+    <span className="inline-flex items-center gap-1 font-medium text-zinc-100">
+      <span className="inline-block h-3 w-3 rounded-[4px]" style={{ background: themeHex(theme, c) }} />
       {COLOR_NAME[c].toLowerCase()}
     </span>
   );

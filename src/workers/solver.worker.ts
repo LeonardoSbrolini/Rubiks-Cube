@@ -1,14 +1,15 @@
 /// <reference lib="webworker" />
 import Cube from "cubejs";
 import "cubejs/lib/solve";
+import { solve2 } from "../lib/twoByTwo";
 
-type Req = { type: "init" } | { type: "solve"; id: number; faces: string };
+type Req = { type: "init"; size: number } | { type: "solve"; id: number; size: number; input: string };
 
-let ready = false;
-function ensureInit() {
-  if (!ready) {
+let ready3 = false;
+function init(size: number) {
+  if (size === 3 && !ready3) {
     Cube.initSolver();
-    ready = true;
+    ready3 = true;
   }
 }
 
@@ -16,17 +17,17 @@ self.onmessage = (e: MessageEvent<Req>) => {
   const msg = e.data;
   try {
     if (msg.type === "init") {
-      ensureInit();
-      self.postMessage({ type: "ready" });
+      init(msg.size);
     } else if (msg.type === "solve") {
-      ensureInit();
-      const solution = Cube.fromString(msg.faces).solve();
+      init(msg.size);
+      const solution =
+        msg.size === 2 ? solve2(msg.input) : Cube.fromString(msg.input).solve();
       self.postMessage({ type: "solution", id: msg.id, solution });
     }
   } catch (err) {
     self.postMessage({
       type: "error",
-      id: "id" in msg ? msg.id : -1,
+      id: msg.type === "solve" ? msg.id : -1,
       message: err instanceof Error ? err.message : String(err),
     });
   }

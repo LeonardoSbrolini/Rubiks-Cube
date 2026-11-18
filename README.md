@@ -3,7 +3,7 @@
 App web (Next.js 16 + Tailwind CSS 4 + three.js) para **sincronizar o seu cubo mágico físico** com um cubo 3D e **ver o passo a passo da solução**.
 
 - Tamanhos 2×2 (solução ótima) e 3×3 (Kociemba).
-- Variações visuais: Clássico, Sem adesivo, Cromado, Dourado, Neon e Pastel.
+- Visual clássico (corpo preto, adesivos coloridos), logo própria e favicon `.ico`.
 - Tela de apresentação em `/` com um cubo 3D que embaralha e se resolve sozinho; o app fica em `/resolver`.
 - No cubo 3D você só gira a câmera; a pintura é feita na planificação, com o seletor de cores logo abaixo das abas.
 - Layout responsivo do celular (retrato e paisagem) ao monitor grande.

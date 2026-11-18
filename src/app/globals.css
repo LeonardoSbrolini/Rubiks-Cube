@@ -143,3 +143,112 @@ body {
     animation: none;
   }
 }
+
+/* ---------- fundo animado (só transform, barato para a GPU) ---------- */
+.bg-blob {
+  will-change: transform;
+}
+.bg-blob-1 {
+  animation: blob1 26s ease-in-out infinite alternate;
+}
+.bg-blob-2 {
+  animation: blob2 32s ease-in-out infinite alternate;
+}
+.bg-blob-3 {
+  animation: blob3 22s ease-in-out infinite alternate;
+}
+@keyframes blob1 {
+  to {
+    transform: translate(18vw, 14vh) scale(1.15);
+  }
+}
+@keyframes blob2 {
+  to {
+    transform: translate(-16vw, -12vh) scale(1.2);
+  }
+}
+@keyframes blob3 {
+  0% {
+    transform: translate(-50%, -50%) scale(0.9);
+  }
+  100% {
+    transform: translate(-20%, -70%) scale(1.25);
+  }
+}
+.grid-drift {
+  background-image:
+    linear-gradient(rgb(255 255 255 / 0.5) 1px, transparent 1px),
+    linear-gradient(90deg, rgb(255 255 255 / 0.5) 1px, transparent 1px);
+  background-size: 48px 48px;
+  mask-image: radial-gradient(ellipse at center, black 15%, transparent 72%);
+  will-change: transform;
+  animation: gridDrift 14s linear infinite;
+}
+@keyframes gridDrift {
+  to {
+    transform: translate(48px, 48px);
+  }
+}
+
+/* ---------- logo ---------- */
+.logo-mark {
+  animation: logoFloat 5s ease-in-out infinite;
+}
+@keyframes logoFloat {
+  0%,
+  100% {
+    transform: translateY(0) rotate(0);
+  }
+  50% {
+    transform: translateY(-2px) rotate(-4deg);
+  }
+}
+
+/* ---------- cards da apresentação ---------- */
+.float-card {
+  animation:
+    cardIn 0.9s cubic-bezier(0.2, 0.8, 0.2, 1) both,
+    cardFloat 6s ease-in-out infinite;
+}
+@keyframes cardIn {
+  from {
+    opacity: 0;
+    transform: translateX(var(--from, 0)) scale(0.96);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+@keyframes cardFloat {
+  0%,
+  100% {
+    translate: 0 0;
+  }
+  50% {
+    translate: 0 -8px;
+  }
+}
+.ticker-item {
+  animation: tickerIn 0.5s cubic-bezier(0.2, 0.8, 0.2, 1) both;
+}
+@keyframes tickerIn {
+  from {
+    opacity: 0;
+    transform: translateY(10px);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .bg-blob,
+  .grid-drift,
+  .logo-mark,
+  .float-card,
+  .ticker-item {
+    animation: none;
+  }
+}

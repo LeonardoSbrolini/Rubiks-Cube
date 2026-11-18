@@ -31,6 +31,8 @@ import { validate3 } from "@/lib/validate3";
 import { validate2 } from "@/lib/twoByTwo";
 import { solve, warmUpSolver } from "@/lib/solver";
 import { THEMES, themeHex, type Theme } from "@/lib/themes";
+import { LogoMark } from "@/components/Brand";
+import Backdrop from "@/components/Backdrop";
 
 type Tab = "paint" | "solve";
 const PREFS_KEY = "cubo-magico:prefs";
@@ -56,8 +58,7 @@ export default function CubeSolverApp() {
   const busy = useRef(false);
 
   const [size, setSize] = useState(3);
-  const [themeId, setThemeId] = useState("classic");
-  const theme = THEMES.find((t) => t.id === themeId) ?? THEMES[0];
+  const theme = THEMES[0];
   const [cube, setCube] = useState<State>(() => solvedState(3));
   const [tab, setTab] = useState<Tab>("paint");
   const [brush, setBrush] = useState<Sticker>("W");
@@ -86,18 +87,17 @@ export default function CubeSolverApp() {
     try {
       const p = JSON.parse(localStorage.getItem(PREFS_KEY) ?? "{}");
       if (SIZES.includes(p.size)) n = p.size;
-      // eslint-disable-next-line react-hooks/set-state-in-effect
-      if (THEMES.some((t) => t.id === p.theme)) setThemeId(p.theme);
     } catch {}
+    // eslint-disable-next-line react-hooks/set-state-in-effect
     setSize(n);
     setCube(loadState(n));
   }, []);
   useEffect(() => {
     try {
-      localStorage.setItem(PREFS_KEY, JSON.stringify({ size, theme: themeId }));
+      localStorage.setItem(PREFS_KEY, JSON.stringify({ size }));
     } catch {}
     warmUpSolver(size);
-  }, [size, themeId]);
+  }, [size]);
   useEffect(() => {
     try {
       if (cube.length === 6 * size * size) localStorage.setItem(stateKey(size), JSON.stringify(cube));
@@ -308,19 +308,19 @@ export default function CubeSolverApp() {
       className="relative flex h-dvh flex-col overflow-hidden bg-[#06060a] text-zinc-100"
       style={{ ["--accent" as string]: accent }}
     >
-      <Aurora theme={theme} />
+      <Backdrop accent={theme.accent} />
 
       {/* ------------------------------------------------ topo */}
       <header className="relative z-20 flex shrink-0 flex-wrap items-center gap-x-4 gap-y-2 px-4 pt-3 pb-2 lg:px-6 lg:pt-4">
         <Link href="/" className="flex items-center gap-3" title="Voltar para a apresentação">
-          <Logo theme={theme} />
+          <LogoMark />
           <div className="leading-tight">
             <h1 className="text-lg font-semibold tracking-tight">Cubo Mágico</h1>
             <p className="hidden text-xs text-zinc-400 sm:block">Sincronize, resolva e aprenda</p>
           </div>
         </Link>
 
-        <div className="order-3 w-full sm:order-none sm:mx-auto sm:w-auto">
+        <div className="ml-auto">
           <Segmented
             value={size}
             onChange={changeSize}
@@ -328,24 +328,6 @@ export default function CubeSolverApp() {
           />
         </div>
 
-        <div className="ml-auto flex items-center gap-1.5 sm:ml-0">
-          {THEMES.map((t) => (
-            <button
-              key={t.id}
-              onClick={() => setThemeId(t.id)}
-              title={t.name}
-              aria-label={`Variação ${t.name}`}
-              className={`group relative h-8 w-8 rounded-full p-[3px] transition ${
-                t.id === themeId ? "ring-2 ring-[var(--accent)]" : "ring-1 ring-white/10 hover:ring-white/40"
-              }`}
-            >
-              <ThemeSwatch t={t} />
-              <span className="pointer-events-none absolute top-10 left-1/2 z-50 -translate-x-1/2 rounded-md bg-black/80 px-2 py-1 text-[11px] whitespace-nowrap opacity-0 transition group-hover:opacity-100">
-                {t.name}
-              </span>
-            </button>
-          ))}
-        </div>
       </header>
 
       {/* ------------------------------------------------ conteúdo */}
@@ -366,7 +348,7 @@ export default function CubeSolverApp() {
           <div className="pointer-events-none absolute top-4 left-4 flex flex-wrap gap-2">
             <Chip>
               <span className="h-1.5 w-1.5 rounded-full bg-[var(--accent)] shadow-[0_0_8px_var(--accent)]" />
-              {size}×{size} · {theme.name}
+              {size}×{size}
             </Chip>
             <Chip className="hidden md:flex">
               Arraste para girar a vista
@@ -654,46 +636,6 @@ export default function CubeSolverApp() {
 }
 
 // ---------------------------------------------------------------- peças de UI
-
-function Aurora({ theme }: { theme: Theme }) {
-  // gradientes estáticos (sem filtro de desfoque animado) para não pesar na GPU
-  return (
-    <div aria-hidden className="pointer-events-none absolute inset-0">
-      <div
-        className="absolute inset-0 transition-[background] duration-700"
-        style={{
-          background: `radial-gradient(60vmax 50vmax at 8% 0%, ${theme.accent}40, transparent 60%),
-            radial-gradient(55vmax 45vmax at 100% 100%, #6366f133, transparent 60%)`,
-        }}
-      />
-      <div className="grid-bg absolute inset-0 opacity-[0.07]" />
-    </div>
-  );
-}
-
-function Logo({ theme }: { theme: Theme }) {
-  const cols = ["W", "R", "G", "Y", "B", "O", "G", "W", "R"] as const;
-  return (
-    <div className="logo grid h-9 w-9 grid-cols-3 gap-[2px] rounded-xl bg-black/60 p-[3px] ring-1 ring-white/10">
-      {cols.map((c, i) => (
-        <span key={i} className="rounded-[3px]" style={{ background: themeHex(theme, c) }} />
-      ))}
-    </div>
-  );
-}
-
-function ThemeSwatch({ t }: { t: Theme }) {
-  const cols = (["R", "G", "B", "Y"] as const).map((c) => themeHex(t, c));
-  return (
-    <span
-      className="block h-full w-full overflow-hidden rounded-full"
-      style={{
-        background: `conic-gradient(${cols[0]} 0 25%, ${cols[1]} 0 50%, ${cols[2]} 0 75%, ${cols[3]} 0)`,
-        boxShadow: `inset 0 0 0 3px ${t.body.color}`,
-      }}
-    />
-  );
-}
 
 function Segmented({
   value,

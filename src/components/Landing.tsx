@@ -16,7 +16,6 @@ const theme = THEMES[0];
 export default function Landing() {
   const cubeRef = useRef<MetalCubeHandle>(null);
   const [state, setState] = useState<State>(() => solvedState(N));
-  const [phase, setPhase] = useState<"embaralhando" | "resolvendo" | "resolvido">("resolvido");
 
   useEffect(() => {
     let alive = true;
@@ -31,7 +30,6 @@ export default function Landing() {
     (async () => {
       await wait(1200);
       while (alive) {
-        setPhase("embaralhando");
         const moves: Move[] = [];
         for (let i = 0; i < 10 && alive; i++) {
           let m: Move;
@@ -44,13 +42,11 @@ export default function Landing() {
         }
         await wait(800);
         if (!alive) break;
-        setPhase("resolvendo");
         for (const m of moves.slice().reverse().map(invertMove)) {
           await play(m, 320);
           await wait(50);
         }
         if (!alive) break;
-        setPhase("resolvido");
         cubeRef.current?.celebrate();
         await wait(2600);
       }
@@ -104,11 +100,6 @@ export default function Landing() {
           distanceScale={0.8}
           className="absolute inset-0"
         />
-        <div className="pointer-events-none absolute inset-x-0 bottom-2 flex justify-center">
-          <span className="rounded-full bg-black/50 px-3 py-1 text-[11px] text-zinc-300 ring-1 ring-white/10">
-            {phase === "embaralhando" ? "Embaralhando…" : phase === "resolvendo" ? "Resolvendo…" : "Resolvido ✓"}
-          </span>
-        </div>
       </div>
 
       {/* só o botão embaixo do cubo */}

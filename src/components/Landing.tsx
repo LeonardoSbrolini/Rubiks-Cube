@@ -71,7 +71,6 @@ export default function Landing() {
           <LogoMark className="h-9 w-9" />
           <span className="text-lg font-semibold tracking-tight">Cubo Mágico</span>
         </div>
-        <span className="rounded-full bg-white/5 px-3 py-1 text-xs text-zinc-400 ring-1 ring-white/10">2×2 · 3×3</span>
       </header>
 
       {/* título */}

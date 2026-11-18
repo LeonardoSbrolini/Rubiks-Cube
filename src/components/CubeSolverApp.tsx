@@ -1,5 +1,6 @@
 "use client";
 
+import Link from "next/link";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import MetalCube, { type MetalCubeHandle } from "@/components/MetalCube";
 import FaceNet from "@/components/FaceNet";
@@ -68,6 +69,12 @@ export default function CubeSolverApp() {
   const [playing, setPlaying] = useState(false);
   const [speed, setSpeed] = useState(1);
   const [confetti, setConfetti] = useState(0);
+  const [showMoves, setShowMoves] = useState(true);
+  useEffect(() => {
+    // em telas baixas os botões de giro começam recolhidos para sobrar espaço para a pintura
+    // eslint-disable-next-line react-hooks/set-state-in-effect
+    if (window.innerWidth >= 1024 && window.innerHeight < 880) setShowMoves(false);
+  }, []);
   const cubeNow = useRef(cube);
   useEffect(() => {
     cubeNow.current = cube;
@@ -186,11 +193,7 @@ export default function CubeSolverApp() {
     queue.current.push(m);
     pump();
   };
-  /** giro feito arrastando no cubo 3D (já animado lá dentro) */
-  const dragTurn = (m: Move) => {
-    leaveSolution();
-    commitMove(m);
-  };
+
 
   const next = useCallback(async () => {
     if (!solution || step >= solution.length) return;
@@ -309,13 +312,13 @@ export default function CubeSolverApp() {
 
       {/* ------------------------------------------------ topo */}
       <header className="relative z-20 flex shrink-0 flex-wrap items-center gap-x-4 gap-y-2 px-4 pt-3 pb-2 lg:px-6 lg:pt-4">
-        <div className="flex items-center gap-3">
+        <Link href="/" className="flex items-center gap-3" title="Voltar para a apresentação">
           <Logo theme={theme} />
           <div className="leading-tight">
             <h1 className="text-lg font-semibold tracking-tight">Cubo Mágico</h1>
             <p className="hidden text-xs text-zinc-400 sm:block">Sincronize, resolva e aprenda</p>
           </div>
-        </div>
+        </Link>
 
         <div className="order-3 w-full sm:order-none sm:mx-auto sm:w-auto">
           <Segmented
@@ -346,17 +349,16 @@ export default function CubeSolverApp() {
       </header>
 
       {/* ------------------------------------------------ conteúdo */}
-      <main className="relative z-10 flex min-h-0 flex-1 flex-col gap-3 px-3 pb-3 lg:grid lg:grid-cols-[minmax(0,1fr)_400px] lg:gap-4 lg:px-6 lg:pb-5">
+      <main className="relative z-10 flex min-h-0 flex-1 flex-col gap-3 px-3 pb-3 max-lg:landscape:grid max-lg:landscape:grid-cols-[minmax(0,1fr)_minmax(300px,46%)] lg:grid lg:grid-cols-[minmax(0,1fr)_380px] lg:gap-4 lg:px-6 lg:pb-5 xl:grid-cols-[minmax(0,1fr)_420px] 2xl:grid-cols-[minmax(0,1fr)_460px]">
         {/* palco 3D */}
-        <section className="stage relative h-[46dvh] shrink-0 overflow-hidden rounded-[28px] lg:h-auto">
+        <section className="stage relative h-[42dvh] min-h-[220px] shrink-0 overflow-hidden rounded-[28px] max-lg:landscape:h-auto max-lg:landscape:min-h-0 lg:h-auto">
           <MetalCube
             ref={cubeRef}
             size={size}
             state={cube}
             theme={theme}
             highlight={tab === "paint" ? validation.badFacelets : undefined}
-            onStickerClick={tab === "paint" ? paint : undefined}
-            onTurn={dragTurn}
+            hoverGlow={false}
             className="absolute inset-0"
           />
           <Confetti fire={confetti} colors={COLORS.map((c) => themeHex(theme, c.id))} />
@@ -367,7 +369,7 @@ export default function CubeSolverApp() {
               {size}×{size} · {theme.name}
             </Chip>
             <Chip className="hidden md:flex">
-              {tab === "paint" ? "Clique para pintar · arraste o cubo para girar camadas" : "Arraste o fundo para mudar a vista"}
+              Arraste para girar a vista
             </Chip>
           </div>
           <div className="absolute top-4 right-4 flex gap-2">
@@ -386,27 +388,7 @@ export default function CubeSolverApp() {
 
           {/* dock inferior */}
           <div className="absolute inset-x-3 bottom-3 flex justify-center">
-            {tab === "paint" ? (
-              <div className="glass-strong flex items-center gap-1.5 rounded-full p-1.5 sm:gap-2 sm:p-2">
-                {palette.map((c) => (
-                  <button
-                    key={c}
-                    onClick={() => setBrush(c)}
-                    title={COLOR_NAME[c]}
-                    aria-label={`Cor ${COLOR_NAME[c]}`}
-                    className={`relative h-8 w-8 rounded-full transition-all duration-200 sm:h-10 sm:w-10 ${
-                      brush === c ? "scale-110 ring-2 ring-white ring-offset-2 ring-offset-black/60" : "hover:scale-105"
-                    }`}
-                    style={{
-                      background: themeHex(theme, c),
-                      boxShadow: brush === c ? `0 0 22px ${themeHex(theme, c)}` : undefined,
-                    }}
-                  >
-                    {c === "X" && <span className="text-xs text-zinc-300">✕</span>}
-                  </button>
-                ))}
-              </div>
-            ) : solution ? (
+            {tab === "solve" && solution ? (
               <div className="glass-strong flex w-full max-w-2xl items-center gap-3 rounded-3xl p-2.5 sm:gap-4 sm:p-3">
                 <div
                   key={step}
@@ -450,7 +432,7 @@ export default function CubeSolverApp() {
         </section>
 
         {/* painel */}
-        <aside className="flex min-h-0 flex-1 flex-col gap-3 overflow-y-auto lg:overflow-hidden">
+        <aside className="scroll-thin flex min-h-0 flex-1 flex-col gap-3 overflow-y-auto overscroll-contain">
           <div className="glass flex shrink-0 rounded-2xl p-1">
             {(["paint", "solve"] as const).map((t) => (
               <button
@@ -470,19 +452,42 @@ export default function CubeSolverApp() {
             ))}
           </div>
 
+          {tab === "paint" && (
+            <div className="glass flex shrink-0 items-center justify-between gap-1 rounded-2xl p-2 sm:justify-center sm:gap-2">
+              {palette.map((c) => (
+                <button
+                  key={c}
+                  onClick={() => setBrush(c)}
+                  title={COLOR_NAME[c]}
+                  aria-label={`Cor ${COLOR_NAME[c]}`}
+                  aria-pressed={brush === c}
+                  className={`relative grid aspect-square w-full max-w-10 place-items-center rounded-full transition-all duration-200 ${
+                    brush === c ? "scale-110 ring-2 ring-white ring-offset-2 ring-offset-[#14141c]" : "hover:scale-105"
+                  }`}
+                  style={{
+                    background: themeHex(theme, c),
+                    boxShadow: brush === c ? `0 0 18px ${themeHex(theme, c)}` : undefined,
+                  }}
+                >
+                  {c === "X" && <span className="text-xs text-zinc-300">✕</span>}
+                </button>
+              ))}
+            </div>
+          )}
+
           {tab === "paint" ? (
             <div className="glass flex shrink-0 flex-col gap-3 rounded-3xl p-4 lg:min-h-0 lg:flex-1 lg:shrink">
               <p className="text-[13px] leading-snug text-zinc-400">
                 {centers ? (
                   <>
-                    Pinte igual ao seu cubo segurando o centro <ColorWord c={centers.U} theme={theme} /> em cima e o{" "}
+                    Escolha a cor acima e clique nos quadradinhos até ficar igual ao seu cubo, segurando o centro <ColorWord c={centers.U} theme={theme} /> em cima e o{" "}
                     <ColorWord c={centers.F} theme={theme} /> de frente.
                   </>
                 ) : (
-                  <>Pinte igual ao seu cubo e mantenha-o na mesma posição em que você pintou.</>
+                  <>Escolha a cor acima e clique nos quadradinhos até ficar igual ao seu cubo. Mantenha-o na mesma posição em que pintou.</>
                 )}
               </p>
-              <div className="flex items-center lg:min-h-0 lg:flex-1">
+              <div className="net-wrap flex items-center justify-center lg:min-h-[170px] lg:flex-1">
                 <FaceNet size={size} state={cube} theme={theme} onPaint={paint} highlight={validation.badFacelets} />
               </div>
               <div className="flex flex-wrap gap-1.5 text-xs">
@@ -616,11 +621,20 @@ export default function CubeSolverApp() {
           )}
 
           <div className="glass shrink-0 rounded-3xl p-3">
-            <div className="mb-2 flex items-center justify-between px-1">
-              <h2 className="text-xs font-semibold tracking-wider text-zinc-400 uppercase">Girar</h2>
-              <span className="text-[11px] text-zinc-500">teclas U R F D L B · Shift = &apos;</span>
-            </div>
-            <div className="grid grid-cols-6 gap-1">
+            <button
+              onClick={() => setShowMoves((v) => !v)}
+              aria-expanded={showMoves}
+              className="flex w-full items-center justify-between px-1"
+            >
+              <h2 className="text-xs font-semibold tracking-wider text-zinc-400 uppercase">Girar faces</h2>
+              <span className="flex items-center gap-2 text-[11px] text-zinc-500">
+                <span className="hidden sm:inline">teclas U R F D L B · Shift = &apos;</span>
+                <svg viewBox="0 0 24 24" className={`h-4 w-4 transition-transform ${showMoves ? "rotate-180" : ""}`} fill="none" stroke="currentColor" strokeWidth="2">
+                  <path d="m6 9 6 6 6-6" />
+                </svg>
+              </span>
+            </button>
+            <div className={`mt-2 grid-cols-6 gap-1 ${showMoves ? "grid" : "hidden"}`}>
               {manualMoves.map((m) => (
                 <button
                   key={`${m.axis}${m.layer}${m.q}`}

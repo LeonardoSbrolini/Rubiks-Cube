@@ -31,6 +31,12 @@ export interface MetalCubeProps {
   onTurn?: (move: Move) => void;
   /** liga o brilho ao passar o mouse sobre os adesivos */
   hoverGlow?: boolean;
+  /** gira a câmera sozinha (tela de apresentação) */
+  autoRotate?: boolean;
+  /** aproxima (<1) ou afasta (>1) a câmera */
+  distanceScale?: number;
+  /** permite zoom com a roda do mouse / pinça */
+  zoom?: boolean;
   className?: string;
 }
 
@@ -77,7 +83,7 @@ function shadowTexture() {
 }
 
 const MetalCube = forwardRef<MetalCubeHandle, MetalCubeProps>(function MetalCube(
-  { size, state, theme, gap = 1, highlight, onStickerClick, onTurn, hoverGlow = true, className },
+  { size, state, theme, gap = 1, highlight, onStickerClick, onTurn, hoverGlow = true, autoRotate = false, zoom = true, distanceScale = 1, className },
   ref,
 ) {
   const mountRef = useRef<HTMLDivElement>(null);
@@ -499,7 +505,7 @@ const MetalCube = forwardRef<MetalCubeHandle, MetalCubeProps>(function MetalCube
     applyTheme();
     paint(state);
     // câmera e sombra proporcionais ao tamanho
-    const dist = 11.8 * (n / 3) * (n === 2 ? 1.25 : 1);
+    const dist = 11.8 * (n / 3) * (n === 2 ? 1.25 : 1) * distanceScale;
     w.camera.position.copy(DEFAULT_DIR).multiplyScalar(dist);
     w.controls.minDistance = dist * 0.6;
     w.controls.maxDistance = dist * 2;
@@ -533,6 +539,14 @@ const MetalCube = forwardRef<MetalCubeHandle, MetalCubeProps>(function MetalCube
   useEffect(() => {
     highlightRef.current = new Set(highlight ?? []);
   }, [highlight]);
+
+  useEffect(() => {
+    const w = world.current;
+    if (!w) return;
+    w.controls.autoRotate = autoRotate;
+    w.controls.autoRotateSpeed = 1.6;
+    w.controls.enableZoom = zoom;
+  }, [autoRotate, zoom]);
 
   useImperativeHandle(ref, () => ({
     resetView() {

@@ -106,3 +106,40 @@ body {
     animation: none;
   }
 }
+
+/* planificação: ocupa a largura disponível sem passar da altura disponível */
+.net-fit {
+  width: min(100%, 420px);
+}
+.scroll-thin {
+  scrollbar-width: thin;
+  scrollbar-color: rgb(255 255 255 / 0.15) transparent;
+}
+
+@media (min-width: 1024px) {
+  .net-wrap {
+    container-type: size;
+  }
+  .net-fit {
+    width: min(100cqw, calc(100cqh * 4 / 3), 420px);
+  }
+}
+
+.fade-up {
+  animation: fadeUp 0.8s cubic-bezier(0.2, 0.8, 0.2, 1) both;
+}
+@keyframes fadeUp {
+  from {
+    opacity: 0;
+    transform: translateY(14px);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .fade-up {
+    animation: none;
+  }
+}

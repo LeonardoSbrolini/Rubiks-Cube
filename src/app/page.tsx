@@ -1,5 +1,5 @@
-import CubeSolverApp from "@/components/CubeSolverApp";
+import Landing from "@/components/Landing";
 
 export default function Home() {
-  return <CubeSolverApp />;
+  return <Landing />;
 }

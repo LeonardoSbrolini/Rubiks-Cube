@@ -25,11 +25,10 @@ export default function FaceNet({
   const radius = size <= 3 ? 5 : size <= 5 ? 3 : 2;
   return (
     <div
-      className="mx-auto grid w-full select-none"
+      className="net-fit mx-auto grid select-none"
       style={{
         gridTemplateColumns: `repeat(${4 * size}, minmax(0, 1fr))`,
         gap,
-        maxWidth: 420,
       }}
     >
       {FACES.map((face, fi) => {
